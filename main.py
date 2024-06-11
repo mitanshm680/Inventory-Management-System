@@ -10,6 +10,7 @@ import hashlib
 logging.basicConfig(filename='inventory.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
+#user management class
 class UserManager:
     def __init__(self, userfile='users.json'):
         self.userfile = userfile
@@ -80,6 +81,7 @@ class UserManager:
         print("User not found.")
         return False
 
+#inventory class
 class Inventory:
     def __init__(self, filename):
         self.filename = filename
