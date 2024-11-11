@@ -1,4 +1,6 @@
 #necessary imports
+#main.py, contains UserManager class and Inventory management class
+
 import json
 import logging
 import csv
