@@ -1,4 +1,4 @@
-# inventory.py 
+# Inventory.py 
 
 import json
 import logging
