@@ -1,3 +1,5 @@
+# main.py
+
 from UserManager import UserManager
 from Inventory import Inventory
 import logging
