@@ -54,14 +54,20 @@ class ComprehensiveTests(unittest.TestCase):
         # Clean database by reinitializing it
         cls.clean_database()
         
-        # Start backend server in a separate process
-        cls.start_backend_server()
-        
-        # Setup test clients
+        # Setup test clients - use the correct constructor format
         cls.client = TestClient(app)
         
-        # Setup admin credentials
-        cls.admin_token = cls.get_auth_token("user", "1234")
+        # Check if we should skip starting the server
+        if not os.environ.get("SKIP_SERVER", "false").lower() == "true":
+            # Start backend server in a separate process
+            cls.start_backend_server()
+            # Setup admin credentials using real server
+            cls.admin_token = cls.get_auth_token("user", "1234")
+        else:
+            logger.info("Skipping API server startup, using TestClient directly")
+            # Mock the auth token since we're not starting a real server
+            cls.base_url = "http://testserver"
+            cls.admin_token = "mock_admin_token"
         
         # Setup test IoT simulation data
         cls.setup_iot_simulation_data()
@@ -265,20 +271,38 @@ class ComprehensiveTests(unittest.TestCase):
         """Test user authentication"""
         logger.info("Testing authentication")
         
-        # Test valid authentication
-        response = requests.post(
-            f"{self.base_url}/token",
-            data={"username": "user", "password": "1234"}
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("access_token", response.json())
-        
-        # Test invalid authentication
-        response = requests.post(
-            f"{self.base_url}/token",
-            data={"username": "user", "password": "wrong"}
-        )
-        self.assertEqual(response.status_code, 401)
+        if os.environ.get("SKIP_SERVER", "false").lower() == "true":
+            logger.info("Using TestClient for authentication tests")
+            # Using TestClient for tests
+            response = self.client.post(
+                "/token",
+                data={"username": "user", "password": "1234"}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("access_token", response.json())
+            
+            # Test invalid authentication
+            response = self.client.post(
+                "/token",
+                data={"username": "user", "password": "wrong"}
+            )
+            self.assertEqual(response.status_code, 401)
+        else:
+            # Using real server for tests
+            # Test valid authentication
+            response = requests.post(
+                f"{self.base_url}/token",
+                data={"username": "user", "password": "1234"}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("access_token", response.json())
+            
+            # Test invalid authentication
+            response = requests.post(
+                f"{self.base_url}/token",
+                data={"username": "user", "password": "wrong"}
+            )
+            self.assertEqual(response.status_code, 401)
         
         logger.info("Authentication tests passed")
     
@@ -941,11 +965,15 @@ if __name__ == "__main__":
     parser.add_argument('--backend-only', action='store_true', help='Only run backend tests')
     parser.add_argument('--skip-frontend', action='store_true', help='Skip frontend tests')
     parser.add_argument('--skip-load', action='store_true', help='Skip load testing')
+    parser.add_argument('--skip-server', action='store_true', help='Skip starting API server, use TestClient directly')
     args = parser.parse_args()
     
     # Set environment variables based on arguments
     if args.skip_frontend:
         os.environ["RUN_FRONTEND_TESTS"] = "false"
+    
+    if args.skip_server:
+        os.environ["SKIP_SERVER"] = "true"
     
     # Run tests
     test_loader = unittest.TestLoader()
