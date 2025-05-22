@@ -100,6 +100,8 @@ class ComprehensiveTests(unittest.TestCase):
     @classmethod
     def start_backend_server(cls):
         """Start the backend server in a separate thread"""
+        logger.info("Starting backend server")
+        
         # Check if a port is available
         def is_port_available(port):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -110,41 +112,82 @@ class ComprehensiveTests(unittest.TestCase):
         # Find an available port
         cls.api_port = 8001
         while not is_port_available(cls.api_port) and cls.api_port < 8100:
+            logger.info(f"Port {cls.api_port} is in use, trying next port")
             cls.api_port += 1
         
         if cls.api_port >= 8100:
             raise RuntimeError("Could not find an available port for the API server")
         
-        # Start the server in a separate process
-        cls.api_process = subprocess.Popen(
-            [sys.executable, "run.py", "--backend-only", "--port", str(cls.api_port)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        logger.info(f"Using port {cls.api_port} for API server")
         
-        # Wait for server to start
-        time.sleep(5)  # Give the server time to start
+        # Try running API directly with uvicorn instead of using run.py
+        try:
+            # First attempt: try direct uvicorn approach
+            logger.info("Starting API server directly with uvicorn")
+            cls.api_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "api:app", "--port", str(cls.api_port)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Wait for server to start
+            time.sleep(2)  # Give the server time to start
+            
+            # Check if process is still running
+            if cls.api_process.poll() is not None:
+                # Process has terminated
+                stdout, stderr = cls.api_process.communicate()
+                logger.error(f"API server failed to start with uvicorn. Return code: {cls.api_process.returncode}")
+                logger.error(f"STDOUT: {stdout}")
+                logger.error(f"STDERR: {stderr}")
+                
+                # Try the original run.py approach as fallback
+                logger.info("Trying fallback with run.py")
+                cls.api_process = subprocess.Popen(
+                    [sys.executable, "run.py", "--port", str(cls.api_port)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
         
-        # Check if server is running
-        start_time = time.time()
-        server_started = False
-        while time.time() - start_time < 30:  # Wait up to 30 seconds
-            try:
-                response = requests.get(f"http://localhost:{cls.api_port}/docs")
-                if response.status_code == 200:
-                    server_started = True
-                    break
-            except requests.ConnectionError:
-                time.sleep(1)  # Wait a bit before retrying
-        
-        if not server_started:
-            raise RuntimeError("Failed to start API server")
-        
-        logger.info(f"Backend server started on port {cls.api_port}")
-        
-        # Configure the base URL for API requests
-        cls.base_url = f"http://localhost:{cls.api_port}"
+            # Check if server is running
+            start_time = time.time()
+            server_started = False
+            while time.time() - start_time < 30:  # Wait up to 30 seconds
+                try:
+                    response = requests.get(f"http://localhost:{cls.api_port}/docs")
+                    if response.status_code == 200:
+                        server_started = True
+                        break
+                except requests.ConnectionError:
+                    # Check if process has terminated
+                    if cls.api_process.poll() is not None:
+                        stdout, stderr = cls.api_process.communicate()
+                        logger.error(f"API server process terminated. Return code: {cls.api_process.returncode}")
+                        logger.error(f"STDOUT: {stdout}")
+                        logger.error(f"STDERR: {stderr}")
+                        break
+                    time.sleep(1)  # Wait a bit before retrying
+            
+            if not server_started:
+                if cls.api_process.poll() is None:
+                    # Process is still running, but not responding
+                    stdout, stderr = cls.api_process.communicate(timeout=1)
+                    logger.error(f"API server is running but not responding. STDOUT: {stdout}")
+                    logger.error(f"STDERR: {stderr}")
+                raise RuntimeError("Failed to start API server - server not responding to requests")
+            
+            logger.info(f"Backend server started on port {cls.api_port}")
+            
+            # Configure the base URL for API requests
+            cls.base_url = f"http://localhost:{cls.api_port}"
+            
+        except Exception as e:
+            logger.error(f"Error starting API server: {str(e)}")
+            if hasattr(cls, 'api_process') and cls.api_process and cls.api_process.poll() is None:
+                cls.api_process.terminate()
+            raise RuntimeError(f"Failed to start API server: {str(e)}")
 
     @classmethod
     def stop_backend_server(cls):
