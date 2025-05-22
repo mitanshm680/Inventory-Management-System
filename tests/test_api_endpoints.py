@@ -1,5 +1,14 @@
+#!/usr/bin/env python3
+import unittest
 import requests
 import json
+import os
+import sys
+import time
+
+# Add parent directory to path so we can import modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
 
 BASE_URL = "http://localhost:8001"
 

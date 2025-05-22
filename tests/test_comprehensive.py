@@ -14,6 +14,11 @@ import socket
 import logging
 from datetime import datetime
 from pathlib import Path
+
+# Add parent directory to path so we can import modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
+
 import pytest
 from fastapi.testclient import TestClient
 from selenium import webdriver
@@ -25,7 +30,6 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 # Import the API for testing
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from api import app
 from database.db_connection import DBConnection
 from database.setup import initialize_database
