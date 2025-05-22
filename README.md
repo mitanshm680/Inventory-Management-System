@@ -1,90 +1,193 @@
 # Inventory Management System
 
-This Python script provides a robust and customizable solution for managing inventory and user authentication. It is designed to offer flexibility, security, and ease of use in various inventory management scenarios.
-
-**Note**: By default, the username is 'user', and the password is '1234' when program is executed for the first time.
-
-## Table of Contents
-
-- [Features](#features)
-- [Dependencies](#dependencies)
-- [Installation](#installation)
-- [Usage](#usage)
-- [User Management](#user-management)
-- [Inventory Management](#inventory-management)
-- [Logging](#logging)
-- [Error Handling](#error-handling)
+A full-stack inventory management system with a React frontend and FastAPI backend.
 
 ## Features
 
-1. **User Authentication**:
-   - Secure authentication system requiring a valid username and password.
-   - Supports multiple user roles: admin, editor, and viewer.
-   - Default user ('user') with password '1234' provided for initial access.
+- User authentication and role-based access control (Admin, Editor, Viewer)
+- Inventory management with custom fields
+- Group-based organization of inventory items
+- History tracking for inventory items
+- User management
+- Price tracking with supplier management
+- Reporting and analytics
+- Low stock notifications
+- Dashboard with stats and visualizations
+- Database backup and restore functionality
 
-2. **User Management**:
-   - Administrators can add, delete, and modify user accounts.
-   - Each user account is associated with a role, determining their level of access within the system.
-   - Admins have full control over user management, including role assignments.
+## Tech Stack
 
-3. **Inventory Management**:
-   - Add new items to the inventory with ease, specifying quantity and optional custom fields for detailed descriptions.
-   - Remove items from the inventory, updating quantities and group associations as needed.
-   - Group similar items together for organizational purposes, simplifying management and reporting.
-   - Search for specific items by name or partial name, facilitating quick inventory lookups.
+### Backend
+- FastAPI
+- SQLite
+- JWT Authentication
+- Modular architecture with services pattern
 
-4. **Reports and Data Export**:
-   - Generate detailed reports in CSV format, providing comprehensive insights into item details and inventory summaries.
-   - Export inventory data to a JSON file for backup, external analysis, or integration with other systems.
+### Frontend
+- React
+- Material UI
+- Chart.js for data visualization
+- React Router for navigation
 
-5. **Logging**:
-   - Comprehensive logging system records all actions performed within the inventory management system.
-   - Log entries include timestamps, log levels, and detailed descriptions of the actions taken.
-   - Logs are stored in a designated file ('inventory.log') for easy auditing and troubleshooting.
+## Project Structure
 
-6. **Error Handling**:
-   - Robust error handling mechanisms prevent unexpected crashes and ensure smooth operation.
-   - Errors are logged for debugging purposes, aiding in rapid identification and resolution of issues.
+```
+inventory-management-system/
+├── models/             # Data models
+│   ├── item.py         # Item model
+│   ├── user.py         # User model
+│   ├── history_entry.py # History entry model
+│   └── price_entry.py  # Price entry model
+├── services/           # Business logic
+│   ├── inventory_service.py  # Inventory operations
+│   ├── user_service.py       # User operations
+│   ├── report_service.py     # Reporting and analytics
+│   └── price_service.py      # Price management
+├── database/           # Database interaction
+│   ├── db_connection.py  # DB connection management
+│   └── setup.py          # Database setup and initialization
+├── utils/              # Utility functions
+│   ├── logging_config.py  # Logging configuration
+│   └── export.py          # Data export utilities
+├── frontend/           # React frontend application
+│   └── ...
+├── api.py              # API endpoints
+├── main.py             # CLI interface
+└── run.py              # Application launcher
+```
 
-## Dependencies
+## Getting Started
 
-This script requires Python 3.x. It utilizes built-in modules such as `json`, `logging`, `csv`, and `hashlib`, eliminating the need for external dependencies.
+### Prerequisites
+- Python 3.8+
+- Node.js 14+
+- npm or yarn
 
-## Installation
+### Environment Variables
 
-1. Clone the repository or download the script to your local machine.
-2. Ensure you have Python 3.x installed on your system.
-3. No additional installation steps are required. Simply run the script using `python inventory_management.py`.
+The application supports the following environment variables:
 
-## Usage
+- `API_PORT`: Port for the backend API server (default: 8001)
+- `FRONTEND_PORT`: Port for the frontend development server (default: 3000)
 
-1. Upon running the script, users are prompted to authenticate with a valid username and password.
-2. Once authenticated, users can access various features based on their assigned roles.
-3. The main menu presents a range of options, including user management, inventory management, report generation, and more.
+You can set these variables before running, or use the `--port` option with `run.py`.
 
-## User Management
+### Easy Setup using run.py
 
-- **Add User**: Administrators can add new users, specifying their roles (admin, editor, viewer).
-- **Delete User**: Administrators can delete existing users, with the exception of the default user ('user').
-- **Change Role**: Administrators can modify the roles of users, adjusting their level of access within the system.
-- **List Users**: Administrators can list all existing users along with their assigned roles for easy reference.
+You can use the provided run.py script to set up everything automatically:
 
-## Inventory Management
+```
+python run.py
+```
 
-- **Add Item**: Add new items to the inventory, specifying quantity and optional custom fields for detailed descriptions.
-- **Remove Item**: Remove items from the inventory, updating quantities and group associations as needed.
-- **Check Inventory**: View inventory items, either grouped by specified categories or as a comprehensive list.
-- **Generate Report**: Generate detailed reports in CSV format, providing insights into item details and inventory summaries.
-- **View Item History**: View historical actions performed on specific items for auditing purposes.
-- **Search Item**: Search for items by name or partial name to quickly locate inventory items.
-- **Export Data**: Export inventory data to a JSON file for backup, external analysis, or integration with other systems.
+This will:
+1. Create a Python virtual environment
+2. Install all required Python packages
+3. Start the backend server
+4. Install frontend dependencies (first run only)
+5. Start the React development server
+6. Open your browser to the application
 
-## Logging
+Additional options:
+- `python run.py --backend-only` - Run only the backend
+- `python run.py --frontend-only` - Run only the frontend
+- `python run.py --cli` - Run the command-line interface
+- `python run.py --port 8080` - Specify a custom port for the API
 
-- Logs are stored in the `inventory.log` file, providing a detailed record of all actions performed within the system.
-- Each log entry includes a timestamp, log level, and a description of the action taken.
+### Manual Setup
 
-## Error Handling
+#### Backend Setup
 
-- The script employs comprehensive error handling mechanisms to ensure smooth operation and prevent unexpected crashes.
-- Errors are logged for debugging purposes, facilitating rapid identification and resolution of issues.
+1. Create and activate a virtual environment:
+
+```
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+2. Install dependencies:
+
+```
+pip install -r requirements.txt
+```
+
+3. Start the backend server:
+
+```
+uvicorn api:app --reload --port 8001
+```
+
+The backend API will be available at http://localhost:8001. You can access the Swagger UI documentation at http://localhost:8001/docs.
+
+#### Frontend Setup
+
+1. Navigate to the frontend directory:
+
+```
+cd frontend
+```
+
+2. Install dependencies:
+
+```
+npm install
+```
+
+3. Start the development server:
+
+```
+npm start
+```
+
+The frontend application will be available at http://localhost:3000.
+
+## Default Login
+
+- Username: user
+- Password: 1234
+- Role: admin
+
+## API Endpoints
+
+### Authentication
+- POST /token - Get authentication token
+
+### Users
+- GET /users/me - Get current user
+- GET /users - Get all users (admin only)
+- POST /users - Create a user (admin only)
+- PUT /users/{username} - Update a user (admin only)
+- DELETE /users/{username} - Delete a user (admin only)
+
+### Inventory
+- GET /inventory - Get all inventory items
+- POST /inventory - Add inventory item (admin/editor)
+- PUT /inventory/{item_name} - Update inventory item (admin/editor)
+- DELETE /inventory/{item_name} - Delete inventory item (admin)
+- GET /inventory/{item_name}/history - Get item history
+- PUT /inventory/{item_name}/group - Update item's group (admin/editor)
+- PUT /inventory/{item_name}/custom-fields - Update item's custom fields (admin/editor)
+
+### Groups
+- GET /groups - Get all groups
+- PUT /groups/{old_name} - Rename a group (admin)
+
+### Price Management
+- GET /prices - Get all prices
+- GET /prices/{item_name} - Get price for an item
+- PUT /prices/{item_name} - Set/update price
+- GET /prices/{item_name}/history - View price history
+- GET /prices/{item_name}/cheapest - Get cheapest supplier
+- DELETE /prices/{item_name} - Delete price entries
+
+### Reports
+- GET /reports/low-stock - Get low stock report
+- POST /reports/inventory - Generate inventory report
+- GET /reports/activity - Get activity report
+
+### System
+- POST /backup - Create a backup (admin)
+
+## License
+
+This project is licensed under the MIT License.
