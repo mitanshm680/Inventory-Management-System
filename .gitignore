@@ -33,6 +33,7 @@ venv.bak/
 *.db
 *.sqlite
 *.sqlite3
+*.json
 
 # Logs
 logs/*
