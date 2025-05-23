@@ -24,7 +24,8 @@ def setup_database():
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS groups (
                     group_name TEXT PRIMARY KEY,
-                    items TEXT
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -47,6 +48,7 @@ def setup_database():
                     price REAL NOT NULL,
                     supplier TEXT,
                     date_updated TEXT NOT NULL,
+                    is_unit_price BOOLEAN DEFAULT TRUE,
                     PRIMARY KEY (item_name, supplier)
                 )
             """)
@@ -58,7 +60,9 @@ def setup_database():
                     item_name TEXT NOT NULL,
                     price REAL NOT NULL,
                     supplier TEXT,
-                    timestamp TEXT NOT NULL
+                    timestamp TEXT NOT NULL,
+                    is_unit_price BOOLEAN DEFAULT TRUE,
+                    quantity_at_time INTEGER
                 )
             """)
             

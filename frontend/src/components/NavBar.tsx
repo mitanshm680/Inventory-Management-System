@@ -1,6 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { AppBar, Box, Toolbar, Typography, Button, IconButton, Drawer, 
-  List, ListItem, ListItemIcon, ListItemText, Divider } from '@mui/material';
+import React, { useState } from 'react';
+import { 
+  AppBar, 
+  Box, 
+  Toolbar, 
+  Typography, 
+  IconButton, 
+  Drawer, 
+  List, 
+  ListItem, 
+  ListItemIcon, 
+  ListItemText, 
+  Divider,
+  Avatar,
+  Tooltip,
+  useMediaQuery,
+  useTheme as useMuiTheme
+} from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
@@ -11,11 +26,25 @@ import GroupIcon from '@mui/icons-material/Group';
 import LogoutIcon from '@mui/icons-material/Logout';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CategoryIcon from '@mui/icons-material/Category';
-import { logout } from '../utils/auth';
+import Brightness4Icon from '@mui/icons-material/Brightness4';
+import Brightness7Icon from '@mui/icons-material/Brightness7';
+import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 
-const NavBar = ({ user }) => {
+interface MenuItem {
+  text: string;
+  icon: React.ReactNode;
+  path: string;
+  requiredRole: 'admin' | 'editor' | 'viewer';
+}
+
+const NavBar: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user, logout } = useAuth();
+  const { toggleColorMode, mode } = useTheme();
+  const muiTheme = useMuiTheme();
+  const isMobile = useMediaQuery(muiTheme.breakpoints.down('md'));
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const handleDrawerToggle = () => {
@@ -27,11 +56,11 @@ const NavBar = ({ user }) => {
     navigate('/login');
   };
 
-  const isActive = (path) => {
+  const isActive = (path: string): boolean => {
     return location.pathname === path;
   };
 
-  const menuItems = [
+  const menuItems: MenuItem[] = [
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/', requiredRole: 'viewer' },
     { text: 'Inventory', icon: <InventoryIcon />, path: '/inventory', requiredRole: 'viewer' },
     { text: 'Groups', icon: <CategoryIcon />, path: '/groups', requiredRole: 'editor' },
@@ -42,15 +71,23 @@ const NavBar = ({ user }) => {
   ];
 
   const drawer = (
-    <div>
+    <Box sx={{ width: 250 }}>
       <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
           Inventory System
         </Typography>
         {user && (
-          <Typography variant="body2" color="text.secondary">
-            Logged in as {user.username} ({user.role})
-          </Typography>
+          <Box sx={{ mt: 2, display: 'flex', alignItems: 'center', flexDirection: 'column' }}>
+            <Avatar sx={{ bgcolor: muiTheme.palette.primary.main, mb: 1 }}>
+              {user.username.charAt(0).toUpperCase()}
+            </Avatar>
+            <Typography variant="body2">
+              {user.name}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+            </Typography>
+          </Box>
         )}
       </Box>
       <Divider />
@@ -70,6 +107,18 @@ const NavBar = ({ user }) => {
                 setDrawerOpen(false);
               }}
               selected={isActive(item.path)}
+              sx={{
+                '&.Mui-selected': {
+                  backgroundColor: `${muiTheme.palette.primary.main}20`,
+                  borderLeft: `4px solid ${muiTheme.palette.primary.main}`,
+                  '&:hover': {
+                    backgroundColor: `${muiTheme.palette.primary.main}30`,
+                  }
+                },
+                '&:hover': {
+                  backgroundColor: `${muiTheme.palette.primary.main}10`,
+                }
+              }}
             >
               <ListItemIcon>{item.icon}</ListItemIcon>
               <ListItemText primary={item.text} />
@@ -78,17 +127,23 @@ const NavBar = ({ user }) => {
       </List>
       <Divider />
       <List>
+        <ListItem button onClick={toggleColorMode}>
+          <ListItemIcon>
+            {mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
+          </ListItemIcon>
+          <ListItemText primary={mode === 'dark' ? 'Light Mode' : 'Dark Mode'} />
+        </ListItem>
         <ListItem button onClick={handleLogout}>
           <ListItemIcon><LogoutIcon /></ListItemIcon>
           <ListItemText primary="Logout" />
         </ListItem>
       </List>
-    </div>
+    </Box>
   );
 
   return (
     <>
-      <AppBar position="static">
+      <AppBar position="sticky" elevation={1}>
         <Toolbar>
           <IconButton
             size="large"
@@ -103,7 +158,21 @@ const NavBar = ({ user }) => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Inventory Management System
           </Typography>
-          <Button color="inherit" onClick={handleLogout}>Logout</Button>
+          
+          {!isMobile && (
+            <>
+              <Tooltip title={mode === 'dark' ? 'Light Mode' : 'Dark Mode'}>
+                <IconButton color="inherit" onClick={toggleColorMode} sx={{ ml: 1 }}>
+                  {mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Logout">
+                <IconButton color="inherit" onClick={handleLogout} sx={{ ml: 1 }}>
+                  <LogoutIcon />
+                </IconButton>
+              </Tooltip>
+            </>
+          )}
         </Toolbar>
       </AppBar>
       <Drawer

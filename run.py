@@ -151,6 +151,8 @@ def start_frontend():
         env["PORT"] = str(FRONTEND_PORT)
         # Pass API_PORT to React app
         env["REACT_APP_API_PORT"] = str(API_PORT)
+        # Prevent React from opening its own browser tab
+        env["BROWSER"] = "none"
         
         print(f"Using npm command: {npm_cmd}")
         # Use shell=True on Windows to make sure npm can be found

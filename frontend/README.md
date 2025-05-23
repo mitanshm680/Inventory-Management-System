@@ -1,6 +1,16 @@
 # Inventory Management System Frontend
 
-This is the React frontend for the Inventory Management System. It provides a modern, user-friendly interface for interacting with the inventory management API.
+This is the frontend for the Inventory Management System, built with React, TypeScript, and Material UI.
+
+## Technologies Used
+
+- React 18
+- TypeScript 5
+- Material UI 5
+- React Router 6
+- Formik & Yup for form validation
+- Chart.js for data visualization
+- Axios for API requests
 
 ## Features
 
@@ -10,30 +20,67 @@ This is the React frontend for the Inventory Management System. It provides a mo
 - **Reports**: Generate inventory reports, view activity, and monitor low stock
 - **User Management**: Admin can manage users and roles
 - **Role-based Access Control**: Different views for admin, editor, and viewer roles
+- Modern, responsive UI with Material Design
+- Dark mode support
+- Form validation
+- TypeScript for better code quality and developer experience
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 14+
+- Node.js (version 16 or later)
 - npm or yarn
 - Backend API (FastAPI) running on port 8001
 
 ### Installation
 
-1. Install dependencies:
+1. Clone the repository
+2. Navigate to the frontend directory:
+   ```
+   cd frontend
+   ```
+3. Install dependencies:
+   ```
+   npm install
+   ```
+   
+   If you encounter dependency conflicts, use:
+   ```
+   npm install --legacy-peer-deps
+   ```
+
+### Running the Application
+
+To start the development server:
 
 ```bash
-npm install
+npm run start
 ```
 
-2. Start the development server:
+The application will be available at http://localhost:3000.
+
+### Building for Production
+
+To create a production build:
 
 ```bash
-npm start
+npm run build
 ```
 
-The app will be available at [http://localhost:3000](http://localhost:3000).
+The build artifacts will be stored in the `build/` directory.
+
+## Project Structure
+
+- `src/components/` - Reusable UI components
+- `src/contexts/` - React context providers
+- `src/pages/` - Page components
+- `src/types/` - TypeScript interfaces
+- `src/utils/` - Utility functions
+
+## API Configuration
+
+The frontend is configured to connect to the backend API running at `http://localhost:8001`. You can change this in the `package.json` file by updating the `"proxy"` field.
 
 ## Environment Variables
 

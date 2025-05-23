@@ -31,30 +31,19 @@ A full-stack inventory management system with a React frontend and FastAPI backe
 
 ## Project Structure
 
-```
-inventory-management-system/
-├── models/             # Data models
-│   ├── item.py         # Item model
-│   ├── user.py         # User model
-│   ├── history_entry.py # History entry model
-│   └── price_entry.py  # Price entry model
-├── services/           # Business logic
-│   ├── inventory_service.py  # Inventory operations
-│   ├── user_service.py       # User operations
-│   ├── report_service.py     # Reporting and analytics
-│   └── price_service.py      # Price management
-├── database/           # Database interaction
-│   ├── db_connection.py  # DB connection management
-│   └── setup.py          # Database setup and initialization
-├── utils/              # Utility functions
-│   ├── logging_config.py  # Logging configuration
-│   └── export.py          # Data export utilities
-├── frontend/           # React frontend application
-│   └── ...
-├── api.py              # API endpoints
-├── main.py             # CLI interface
-└── run.py              # Application launcher
-```
+The Inventory Management System is a full-stack application consisting of:
+
+- **Backend API**: Built with FastAPI (Python), handling data operations and business logic
+- **Frontend**: Built with React and TypeScript, providing a modern and responsive user interface
+- **Database**: SQLite for development, can be configured for other databases in production
+
+### Key Directories
+
+- `/frontend`: React TypeScript frontend application
+- `/models`: SQLAlchemy database models
+- `/services`: Business logic services
+- `/utils`: Utility functions
+- `/database`: Database connection and repository implementations
 
 ## Getting Started
 
@@ -191,3 +180,16 @@ The frontend application will be available at http://localhost:3000.
 ## License
 
 This project is licensed under the MIT License.
+
+## TypeScript Frontend
+
+The frontend has been fully converted to TypeScript for better code quality and developer experience. Features include:
+
+- Type-safe API interactions
+- Improved component props validation
+- Better code organization with clear interfaces
+- Dark mode support
+- Modern UI with Material Design
+- Role-based access control
+
+For more details about the frontend, see [frontend/README.md](frontend/README.md).

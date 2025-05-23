@@ -37,13 +37,17 @@ class PriceEntry:
         """Create a PriceEntry object from a database row."""
         date_updated = datetime.fromisoformat(row['date_updated']) if row['date_updated'] else datetime.now()
         
+        # Check if columns exist in the row
+        is_unit_price = row['is_unit_price'] if 'is_unit_price' in row else True
+        quantity = row['quantity_at_time'] if 'quantity_at_time' in row else None
+        
         return cls(
             item_name=row['item_name'],
             price=row['price'],
             supplier=row['supplier'],
             date_updated=date_updated,
-            is_unit_price=row.get('is_unit_price', True),
-            quantity=row.get('quantity', None)
+            is_unit_price=is_unit_price,
+            quantity=quantity
         )
     
     def to_dict(self) -> Dict[str, Any]:

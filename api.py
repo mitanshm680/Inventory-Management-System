@@ -11,6 +11,14 @@ import os
 import hashlib
 import logging
 import sqlite3
+import sys
+
+# Debug output
+print("Starting API server with args:", sys.argv)
+print("Current working directory:", os.getcwd())
+
+# Set default port for uvicorn when run directly
+import uvicorn
 
 # Import our services
 from services.inventory_service import InventoryService
@@ -66,6 +74,10 @@ class TokenData(BaseModel):
 class User(BaseModel):
     username: str
     role: str
+    
+    @property
+    def can_edit(self):
+        return self.role in ["admin", "editor"]
 
 class UserCreate(BaseModel):
     username: str
@@ -360,11 +372,8 @@ async def get_groups(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Error fetching groups")
 
 @app.post("/groups", status_code=201)
-async def create_group(group: GroupCreate, current_user: User = Depends(get_current_user)):
+async def create_group(group: GroupCreate, current_user: User = Depends(get_editor_user)):
     """Create a new group."""
-    if not current_user.can_edit:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-        
     try:
         with DBConnection().get_cursor() as cursor:
             # Check if group already exists
@@ -388,13 +397,88 @@ async def create_group(group: GroupCreate, current_user: User = Depends(get_curr
 @app.put("/groups/{old_name}")
 async def rename_group(old_name: str, new_name: str, current_user: User = Depends(get_admin_user)):
     """Rename a group."""
-    success = inventory_service.rename_group(old_name, new_name)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Group not found or empty"
-        )
-    return {"message": f"Group renamed from {old_name} to {new_name}"}
+    if not new_name:
+        # If new_name is empty, handle this as a delete request
+        try:
+            with DBConnection().get_cursor() as cursor:
+                # First check if the group exists
+                cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (old_name,))
+                if not cursor.fetchone():
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Group not found"
+                    )
+                
+                # Remove group from items first
+                cursor.execute("UPDATE inventory SET group_name = NULL WHERE group_name = ?", (old_name,))
+                
+                # Then delete the group
+                cursor.execute("DELETE FROM groups WHERE group_name = ?", (old_name,))
+                
+                logging.info(f"Group deleted: {old_name}")
+                return {"message": f"Group {old_name} has been deleted"}
+                
+        except sqlite3.Error as e:
+            logging.error(f"Database error: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error deleting group")
+    else:
+        # Handle as a rename request
+        try:
+            with DBConnection().get_cursor() as cursor:
+                # Check if the old group exists
+                cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (old_name,))
+                if not cursor.fetchone():
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Group not found"
+                    )
+                
+                # Check if the new name already exists
+                cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (new_name,))
+                if cursor.fetchone():
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="A group with this name already exists"
+                    )
+                
+                # Update the group name
+                cursor.execute("UPDATE groups SET group_name = ? WHERE group_name = ?", (new_name, old_name))
+                
+                # Update any items that use this group
+                cursor.execute("UPDATE inventory SET group_name = ? WHERE group_name = ?", (new_name, old_name))
+                
+                logging.info(f"Group renamed from {old_name} to {new_name}")
+                return {"message": f"Group renamed from {old_name} to {new_name}"}
+                
+        except sqlite3.Error as e:
+            logging.error(f"Database error: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error renaming group")
+
+@app.delete("/groups/{group_name}")
+async def delete_group(group_name: str, current_user: User = Depends(get_admin_user)):
+    """Delete a group."""
+    try:
+        with DBConnection().get_cursor() as cursor:
+            # Check if the group exists
+            cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (group_name,))
+            if not cursor.fetchone():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Group not found"
+                )
+            
+            # Remove group from items first
+            cursor.execute("UPDATE inventory SET group_name = NULL WHERE group_name = ?", (group_name,))
+            
+            # Then delete the group
+            cursor.execute("DELETE FROM groups WHERE group_name = ?", (group_name,))
+            
+            logging.info(f"Group deleted: {group_name}")
+            return {"message": f"Group {group_name} has been deleted"}
+            
+    except sqlite3.Error as e:
+        logging.error(f"Database error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error deleting group")
 
 @app.post("/backup")
 async def create_backup(current_user: User = Depends(get_admin_user)):
@@ -542,8 +626,6 @@ async def delete_item_price(item_name: str, supplier: Optional[str] = None, curr
         return {"message": f"All price entries for {item_name} deleted"}
 
 if __name__ == "__main__":
-    import uvicorn
-    
     # Get port from environment variable or use default
-    port = int(os.environ.get("API_PORT", 8001))
+    port = int(os.environ.get("API_PORT", 8005))
     uvicorn.run(app, host="0.0.0.0", port=port) 
