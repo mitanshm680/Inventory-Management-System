@@ -6,7 +6,21 @@ import argparse
 import platform
 import time
 import webbrowser
+import socket
+import signal
+import psutil
 from pathlib import Path
+from typing import Optional, Tuple
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('logs/server.log')
+    ]
+)
 
 # Environment variables with defaults
 API_PORT = int(os.environ.get("API_PORT", 8001))
@@ -32,15 +46,15 @@ def check_venv():
 def create_venv():
     """Create a virtual environment if not exists."""
     if os.path.exists('.venv'):
-        print("Virtual environment already exists.")
+        logging.info("Virtual environment already exists.")
         return
     
-    print("Creating virtual environment...")
+    logging.info("Creating virtual environment...")
     try:
         subprocess.check_call([sys.executable, '-m', 'venv', '.venv'])
-        print("Virtual environment created successfully.")
-    except subprocess.CalledProcessError:
-        print("Failed to create virtual environment.")
+        logging.info("Virtual environment created successfully.")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to create virtual environment: {e}")
         sys.exit(1)
 
 def activate_venv():
@@ -73,178 +87,223 @@ def activate_venv():
     print("Then run this script again.")
     sys.exit(0)
 
+def get_venv_python() -> str:
+    """Get the path to the Python executable in the virtual environment."""
+    if platform.system() == "Windows":
+        python_path = os.path.join('.venv', 'Scripts', 'python.exe')
+    else:
+        python_path = os.path.join('.venv', 'bin', 'python')
+    
+    if not os.path.exists(python_path):
+        raise RuntimeError("Virtual environment Python not found. Please run setup first.")
+    
+    return python_path
+
 def install_backend_dependencies():
-    """Install backend dependencies."""
-    print("Installing backend dependencies...")
-    pip_cmd = [sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt']
+    """Install backend dependencies with proper error handling."""
+    logging.info("Installing backend dependencies...")
+    venv_pip = get_venv_python()
+    pip_cmd = [venv_pip, '-m', 'pip', 'install', '-r', 'requirements.txt']
+    
     try:
         subprocess.check_call(pip_cmd)
-        print("Backend dependencies installed successfully.")
+        logging.info("Backend dependencies installed successfully.")
     except subprocess.CalledProcessError as e:
-        print(f"Failed to install backend dependencies. Error: {e}")
+        logging.error(f"Failed to install backend dependencies: {e}")
         sys.exit(1)
 
 def install_frontend_dependencies():
-    """Install frontend dependencies if not yet installed."""
+    """Install frontend dependencies with proper error handling."""
     if not os.path.exists(os.path.join('frontend', 'node_modules')):
-        print("Installing frontend dependencies (this may take a while)...")
+        logging.info("Installing frontend dependencies (this may take a while)...")
         try:
-            npm_cmd = 'npm'
-            if platform.system() == "Windows" and os.path.exists('C:\\Program Files\\nodejs\\npm.cmd'):
-                npm_cmd = 'C:\\Program Files\\nodejs\\npm.cmd'
-                
+            npm_cmd = 'npm.cmd' if platform.system() == "Windows" else 'npm'
             subprocess.check_call([npm_cmd, 'install'], cwd='frontend')
-            print("Frontend dependencies installed successfully.")
-        except subprocess.CalledProcessError:
-            print("Failed to install frontend dependencies.")
+            logging.info("Frontend dependencies installed successfully.")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to install frontend dependencies: {e}")
+            sys.exit(1)
+        except FileNotFoundError:
+            logging.error("npm not found. Please install Node.js and npm first.")
+            logging.error("Download from: https://nodejs.org/")
             sys.exit(1)
     else:
-        print("Frontend dependencies already installed.")
+        logging.info("Frontend dependencies already installed.")
 
-def start_backend():
-    """Start the backend server."""
-    global API_PORT
-    
-    max_retry = 5
-    retry_count = 0
-    
-    while retry_count < max_retry:
-        print(f"Starting backend server on port {API_PORT}...")
-        backend_cmd = [sys.executable, 'api.py']
-        # Pass the port as an environment variable
-        env = os.environ.copy()
-        env["API_PORT"] = str(API_PORT)
-        
+def is_port_available(port: int) -> bool:
+    """Check if a port is available."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
-            backend_process = subprocess.Popen(backend_cmd, env=env)
-            # Give it a moment to start and check if it crashes immediately
-            time.sleep(2)
-            
-            # Check if the process is still running
-            if backend_process.poll() is None:
-                print(f"Backend server successfully started on port {API_PORT}.")
-                return backend_process
-            else:
-                # Process exited with an error
-                retry_count += 1
-                API_PORT += 1
-                print(f"Port {API_PORT-1} is in use. Trying port {API_PORT}...")
-                
-        except Exception as e:
-            print(f"Error starting backend: {e}")
-            retry_count += 1
-            API_PORT += 1
-            print(f"Trying port {API_PORT}...")
-    
-    print("Failed to start backend server after multiple attempts.")
-    sys.exit(1)
+            s.bind(('localhost', port))
+            return True
+        except socket.error:
+            return False
 
-def start_frontend():
-    """Start the frontend development server."""
-    print(f"Starting frontend development server on port {FRONTEND_PORT}...")
+def find_available_port(start_port: int, max_attempts: int = 10) -> int:
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        if is_port_available(port):
+            return port
+    raise RuntimeError(f"No available ports found in range {start_port}-{start_port + max_attempts - 1}")
+
+def kill_process_on_port(port: int):
+    """Kill any process running on the specified port."""
+    for proc in psutil.process_iter(['pid', 'name', 'connections']):
+        try:
+            for conn in proc.connections():
+                if conn.laddr.port == port:
+                    logging.warning(f"Killing process {proc.pid} ({proc.name()}) on port {port}")
+                    if platform.system() == "Windows":
+                        subprocess.call(['taskkill', '/F', '/PID', str(proc.pid)])
+                    else:
+                        os.kill(proc.pid, signal.SIGTERM)
+                    time.sleep(1)  # Give the process time to die
+                    return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+def start_backend(port: int = None) -> Tuple[subprocess.Popen, int]:
+    """Start the backend server with proper port management."""
+    if port is None:
+        port = find_available_port(API_PORT)
+    
+    if not is_port_available(port):
+        kill_process_on_port(port)
+        time.sleep(1)  # Wait for port to be freed
+        if not is_port_available(port):
+            port = find_available_port(API_PORT)
+    
+    logging.info(f"Starting backend server on port {port}...")
+    venv_python = get_venv_python()
+    backend_cmd = [venv_python, 'api.py']
+    env = os.environ.copy()
+    env["API_PORT"] = str(port)
+    
     try:
-        # For Windows, we'll directly use 'npm' since we've verified it's in the PATH
-        npm_cmd = 'npm'
-        
-        # Pass the port as an environment variable for React
-        env = os.environ.copy()
-        env["PORT"] = str(FRONTEND_PORT)
-        # Pass API_PORT to React app
-        env["REACT_APP_API_PORT"] = str(API_PORT)
-        # Prevent React from opening its own browser tab
-        env["BROWSER"] = "none"
-        
-        print(f"Using npm command: {npm_cmd}")
-        # Use shell=True on Windows to make sure npm can be found
-        if platform.system() == "Windows":
-            frontend_process = subprocess.Popen(f"{npm_cmd} start", cwd='frontend', env=env, shell=True)
-        else:
-            frontend_process = subprocess.Popen([npm_cmd, 'start'], cwd='frontend', env=env)
-        print(f"Frontend development server started on port {FRONTEND_PORT}.")
-        return frontend_process
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to start frontend server. Error: {e}")
+        backend_process = subprocess.Popen(backend_cmd, env=env)
+        # Wait for server to start
+        max_retries = 30
+        for i in range(max_retries):
+            if not is_port_available(port):  # Port is in use = server started
+                logging.info(f"Backend server successfully started on port {port}")
+                return backend_process, port
+            time.sleep(1)
+            if i == max_retries - 1:
+                raise RuntimeError("Backend server failed to start")
+            if backend_process.poll() is not None:
+                raise RuntimeError("Backend process terminated unexpectedly")
+    except Exception as e:
+        logging.error(f"Failed to start backend server: {e}")
         sys.exit(1)
-    except FileNotFoundError:
-        print("ERROR: npm not found. Please make sure Node.js and npm are installed.")
-        print("Download from: https://nodejs.org/")
+
+def start_frontend(api_port: int, frontend_port: Optional[int] = None) -> Tuple[subprocess.Popen, int]:
+    """Start the frontend development server with proper port management."""
+    if frontend_port is None:
+        frontend_port = find_available_port(FRONTEND_PORT)
+    
+    if not is_port_available(frontend_port):
+        kill_process_on_port(frontend_port)
+        time.sleep(1)
+        if not is_port_available(frontend_port):
+            frontend_port = find_available_port(FRONTEND_PORT)
+    
+    logging.info(f"Starting frontend development server on port {frontend_port}...")
+    npm_cmd = 'npm.cmd' if platform.system() == "Windows" else 'npm'
+    
+    # Pass the ports as environment variables for React
+    env = os.environ.copy()
+    env["PORT"] = str(frontend_port)
+    env["REACT_APP_API_PORT"] = str(api_port)
+    env["BROWSER"] = "none"  # Prevent automatic browser opening
+    
+    try:
+        if platform.system() == "Windows":
+            frontend_process = subprocess.Popen(
+                f"{npm_cmd} start",
+                cwd='frontend',
+                env=env,
+                shell=True
+            )
+        else:
+            frontend_process = subprocess.Popen(
+                [npm_cmd, 'start'],
+                cwd='frontend',
+                env=env
+            )
+        
+        # Wait for server to start
+        max_retries = 30
+        for i in range(max_retries):
+            if not is_port_available(frontend_port):
+                logging.info(f"Frontend server successfully started on port {frontend_port}")
+                return frontend_process, frontend_port
+            time.sleep(1)
+            if i == max_retries - 1:
+                raise RuntimeError("Frontend server failed to start")
+            if frontend_process.poll() is not None:
+                raise RuntimeError("Frontend process terminated unexpectedly")
+    except Exception as e:
+        logging.error(f"Failed to start frontend server: {e}")
         sys.exit(1)
 
 def main():
-    """Main entry point for the application launcher."""
-    global API_PORT
+    """Main entry point with improved error handling."""
+    import argparse
     
     parser = argparse.ArgumentParser(description='Run the Inventory Management System')
-    parser.add_argument('--backend-only', action='store_true', help='Run only the backend server')
-    parser.add_argument('--frontend-only', action='store_true', help='Run only the frontend server')
-    parser.add_argument('--cli', action='store_true', help='Run the CLI version')
-    parser.add_argument('--port', type=int, help=f'Port for the API (default: {API_PORT})')
-    parser.add_argument('--no-browser', action='store_true', help='Do not open browser automatically')
+    parser.add_argument('--backend-only', action='store_true', help='Run only the backend')
+    parser.add_argument('--frontend-only', action='store_true', help='Run only the frontend')
+    parser.add_argument('--port', type=int, help='Specify custom port for the API')
+    parser.add_argument('--frontend-port', type=int, help='Specify custom port for the frontend')
     args = parser.parse_args()
     
-    # Override port if specified in command line
-    if args.port:
-        API_PORT = args.port
-        os.environ["API_PORT"] = str(API_PORT)
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
     
-    # Check and activate virtual environment if needed
-    if not check_venv():
-        activate_venv()
-    
-    # Install dependencies
-    install_backend_dependencies()
-    
-    if args.cli:
-        # Run the CLI version
-        subprocess.call([sys.executable, 'main.py'])
-    else:
-        # Start the application components
+    try:
+        if not args.frontend_only:
+            create_venv()
+            install_backend_dependencies()
+        
+        if not args.backend_only:
+            install_frontend_dependencies()
+        
         backend_process = None
         frontend_process = None
         
         try:
             if not args.frontend_only:
-                backend_process = start_backend()
-                # After backend starts, update the environment variable
-                os.environ["API_PORT"] = str(API_PORT)
+                backend_process, api_port = start_backend(args.port)
             
             if not args.backend_only:
-                install_frontend_dependencies()
-                frontend_process = start_frontend()
-                
-                # Open browser after a short delay
-                if not args.no_browser:
-                    print(f"Opening browser in 3 seconds at http://localhost:{FRONTEND_PORT}...")
-                    time.sleep(3)
-                    # Only open the browser once
-                    webbrowser.open(f'http://localhost:{FRONTEND_PORT}')
+                frontend_process, frontend_port = start_frontend(
+                    api_port if backend_process else API_PORT,
+                    args.frontend_port
+                )
             
-            # Keep the script running until Ctrl+C
-            print("\nPress Ctrl+C to stop the servers\n")
-            
-            # Wait for processes to complete
+            # Keep the script running
             while True:
-                if backend_process and backend_process.poll() is not None:
-                    print("Backend server stopped.")
-                    break
-                    
-                if frontend_process and frontend_process.poll() is not None:
-                    print("Frontend server stopped.")
-                    break
-                    
                 time.sleep(1)
-                
+                # Check if processes are still running
+                if backend_process and backend_process.poll() is not None:
+                    raise RuntimeError("Backend process terminated unexpectedly")
+                if frontend_process and frontend_process.poll() is not None:
+                    raise RuntimeError("Frontend process terminated unexpectedly")
+        
         except KeyboardInterrupt:
-            print("\nShutting down servers...")
+            logging.info("Shutting down servers...")
         finally:
-            # Clean up processes
+            # Cleanup
             if backend_process:
                 backend_process.terminate()
-                print("Backend server terminated.")
-                
+                backend_process.wait(timeout=5)
             if frontend_process:
                 frontend_process.terminate()
-                print("Frontend server terminated.")
+                frontend_process.wait(timeout=5)
+    
+    except Exception as e:
+        logging.error(f"Error running servers: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main() 

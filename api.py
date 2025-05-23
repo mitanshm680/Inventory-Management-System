@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import json
@@ -144,7 +145,52 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+# Add custom exception handlers
+@app.exception_handler(sqlite3.Error)
+async def sqlite_exception_handler(request: Request, exc: sqlite3.Error):
+    """Handle SQLite database errors."""
+    error_id = datetime.now().strftime("%Y%m%d%H%M%S")
+    logging.error(f"Database error {error_id}: {str(exc)}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "Database error occurred",
+            "error_id": error_id,
+            "detail": "A database error occurred. Please try again later."
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle general exceptions."""
+    error_id = datetime.now().strftime("%Y%m%d%H%M%S")
+    logging.error(f"Unhandled error {error_id}: {str(exc)}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "Internal server error",
+            "error_id": error_id,
+            "detail": "An unexpected error occurred. Please try again later."
+        }
+    )
+
+# Add request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all incoming requests and their processing time."""
+    start_time = datetime.now()
+    response = await call_next(request)
+    process_time = (datetime.now() - start_time).total_seconds() * 1000
+    logging.info(
+        f"Path: {request.url.path} "
+        f"Method: {request.method} "
+        f"Status: {response.status_code} "
+        f"Processing Time: {process_time:.2f}ms"
+    )
+    return response
+
 async def get_current_user(token: str = Depends(oauth2_scheme)):
+    """Get current user from JWT token with improved error handling."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -157,13 +203,24 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         if username is None:
             raise credentials_exception
         token_data = TokenData(username=username, role=role)
-    except JWTError:
+    except JWTError as e:
+        logging.error(f"JWT validation error: {str(e)}")
+        raise credentials_exception
+    except Exception as e:
+        logging.error(f"Unexpected error in token validation: {str(e)}")
         raise credentials_exception
     
-    user = user_service.get_user(token_data.username)
-    if user is None:
-        raise credentials_exception
-    return User(username=token_data.username, role=user['role'])
+    try:
+        user = user_service.get_user(token_data.username)
+        if user is None:
+            raise credentials_exception
+        return User(username=token_data.username, role=user['role'])
+    except Exception as e:
+        logging.error(f"Error fetching user data: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error accessing user data"
+        )
 
 async def get_admin_user(current_user: User = Depends(get_current_user)):
     if current_user.role != "admin":
@@ -396,63 +453,56 @@ async def create_group(group: GroupCreate, current_user: User = Depends(get_edit
 
 @app.put("/groups/{old_name}")
 async def rename_group(old_name: str, new_name: str, current_user: User = Depends(get_admin_user)):
-    """Rename a group."""
-    if not new_name:
-        # If new_name is empty, handle this as a delete request
-        try:
-            with DBConnection().get_cursor() as cursor:
-                # First check if the group exists
-                cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (old_name,))
-                if not cursor.fetchone():
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="Group not found"
-                    )
-                
-                # Remove group from items first
-                cursor.execute("UPDATE inventory SET group_name = NULL WHERE group_name = ?", (old_name,))
-                
-                # Then delete the group
-                cursor.execute("DELETE FROM groups WHERE group_name = ?", (old_name,))
-                
-                logging.info(f"Group deleted: {old_name}")
-                return {"message": f"Group {old_name} has been deleted"}
-                
-        except sqlite3.Error as e:
-            logging.error(f"Database error: {str(e)}")
-            raise HTTPException(status_code=500, detail="Error deleting group")
-    else:
-        # Handle as a rename request
-        try:
-            with DBConnection().get_cursor() as cursor:
-                # Check if the old group exists
-                cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (old_name,))
-                if not cursor.fetchone():
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="Group not found"
-                    )
-                
-                # Check if the new name already exists
+    """Rename a group with improved error handling."""
+    if not old_name or not new_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both old and new group names must be provided"
+        )
+    
+    try:
+        with DBConnection().get_cursor() as cursor:
+            # Check if the old group exists
+            cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (old_name,))
+            if not cursor.fetchone():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Group '{old_name}' not found"
+                )
+            
+            # Check if the new name already exists
+            if old_name != new_name:  # Only check if actually renaming
                 cursor.execute("SELECT 1 FROM groups WHERE group_name = ?", (new_name,))
                 if cursor.fetchone():
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="A group with this name already exists"
+                        detail=f"A group named '{new_name}' already exists"
                     )
-                
-                # Update the group name
-                cursor.execute("UPDATE groups SET group_name = ? WHERE group_name = ?", (new_name, old_name))
-                
-                # Update any items that use this group
-                cursor.execute("UPDATE inventory SET group_name = ? WHERE group_name = ?", (new_name, old_name))
-                
-                logging.info(f"Group renamed from {old_name} to {new_name}")
-                return {"message": f"Group renamed from {old_name} to {new_name}"}
-                
-        except sqlite3.Error as e:
-            logging.error(f"Database error: {str(e)}")
-            raise HTTPException(status_code=500, detail="Error renaming group")
+            
+            # Update the group name
+            cursor.execute("UPDATE groups SET group_name = ? WHERE group_name = ?", (new_name, old_name))
+            
+            # Update any items that use this group
+            cursor.execute("UPDATE inventory SET group_name = ? WHERE group_name = ?", (new_name, old_name))
+            
+            logging.info(f"Group renamed from '{old_name}' to '{new_name}' by user '{current_user.username}'")
+            return {
+                "message": f"Group renamed from '{old_name}' to '{new_name}'",
+                "affected_items": cursor.rowcount
+            }
+            
+    except sqlite3.Error as e:
+        logging.error(f"Database error while renaming group: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error occurred while renaming group"
+        )
+    except Exception as e:
+        logging.error(f"Unexpected error while renaming group: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while renaming group"
+        )
 
 @app.delete("/groups/{group_name}")
 async def delete_group(group_name: str, current_user: User = Depends(get_admin_user)):
