@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import {
-  Container, 
-  Typography, 
-  Box, 
-  Paper, 
+  Container,
+  Typography,
+  Box,
+  Paper,
   Divider,
   List,
   ListItem,
@@ -24,7 +24,8 @@ import {
   Card,
   CardContent,
   CardHeader,
-  IconButton
+  IconButton,
+  TextField
 } from '@mui/material';
 import BackupIcon from '@mui/icons-material/Backup';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -33,8 +34,9 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LockIcon from '@mui/icons-material/Lock';
 import BuildIcon from '@mui/icons-material/Build';
+import DownloadIcon from '@mui/icons-material/Download';
 import { useAuth } from '../contexts/AuthContext';
-import api from '../utils/api';
+import { apiService } from '../services/api';
 
 const Settings: React.FC = () => {
   const { user } = useAuth();
@@ -44,6 +46,11 @@ const Settings: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [openDialog, setOpenDialog] = useState(false);
+  const [openPasswordDialog, setOpenPasswordDialog] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
 
   const handleDarkModeToggle = () => {
     const newMode = !darkMode;
@@ -60,15 +67,16 @@ const Settings: React.FC = () => {
     setOpenDialog(false);
   };
 
-  const handleBackupConfirm = async () => {
-    setOpenDialog(false);
+  const handleBackup = async () => {
+    setError('');
+    setSuccess('');
     setBackupInProgress(true);
     try {
-      const response = await api.post('/backup');
-      setSuccess(`Backup created successfully: ${response.data.filename}`);
+      const response = await apiService.createBackup();
+      setSuccess(`Backup created successfully: ${response.filename}`);
     } catch (err) {
-      console.error('Backup failed:', err);
-      setError('Failed to create backup. Please try again.');
+      console.error('Error creating backup:', err);
+      setError('Failed to create backup');
     } finally {
       setBackupInProgress(false);
     }
@@ -77,6 +85,70 @@ const Settings: React.FC = () => {
   const handleAlertClose = () => {
     setError(null);
     setSuccess(null);
+  };
+
+  const handlePasswordDialogOpen = () => {
+    setOpenPasswordDialog(true);
+    setPasswordError('');
+    setOldPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+  };
+
+  const handlePasswordDialogClose = () => {
+    setOpenPasswordDialog(false);
+    setPasswordError('');
+    setOldPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+  };
+
+  const handlePasswordChange = async () => {
+    setPasswordError('');
+
+    if (!oldPassword || !newPassword || !confirmPassword) {
+      setPasswordError('All fields are required');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New passwords do not match');
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      setPasswordError('Password must be at least 4 characters');
+      return;
+    }
+
+    try {
+      await apiService.changePassword(oldPassword, newPassword);
+      setSuccess('Password changed successfully');
+      handlePasswordDialogClose();
+    } catch (err: any) {
+      setPasswordError(err.response?.data?.detail || 'Failed to change password');
+    }
+  };
+
+  const handleCSVExport = async () => {
+    try {
+      setLoading(true);
+      const blob = await apiService.exportToCSV();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `inventory_export_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setSuccess('Inventory exported successfully');
+    } catch (err) {
+      console.error('Error exporting CSV:', err);
+      setError('Failed to export inventory');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const isAdmin = user?.role === 'admin';
@@ -103,18 +175,28 @@ const Settings: React.FC = () => {
                 <Divider />
                 <CardContent>
                   <Typography variant="body2" paragraph>
-                    Create backups of the database or restore from previous backups.
+                    Create backups of the database or export inventory to CSV.
                   </Typography>
-                  <Button 
-                    variant="contained" 
-                    startIcon={<BackupIcon />}
-                    onClick={handleBackupClick}
-                    disabled={backupInProgress}
-                  >
-                    {backupInProgress ? 'Creating Backup...' : 'Create Backup'}
-                  </Button>
-                  {backupInProgress && (
-                    <CircularProgress size={20} sx={{ ml: 2 }} />
+                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                    <Button
+                      variant="contained"
+                      startIcon={<BackupIcon />}
+                      onClick={handleBackupClick}
+                      disabled={backupInProgress}
+                    >
+                      {backupInProgress ? 'Creating Backup...' : 'Create Backup'}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<DownloadIcon />}
+                      onClick={handleCSVExport}
+                      disabled={loading}
+                    >
+                      Export CSV
+                    </Button>
+                  </Box>
+                  {(backupInProgress || loading) && (
+                    <CircularProgress size={20} sx={{ mt: 2 }} />
                   )}
                 </CardContent>
               </Card>
@@ -205,9 +287,9 @@ const Settings: React.FC = () => {
                 <ListItemIcon>
                   <DarkModeIcon />
                 </ListItemIcon>
-                <ListItemText 
-                  primary="Dark Mode" 
-                  secondary="Toggle between light and dark theme" 
+                <ListItemText
+                  primary="Dark Mode"
+                  secondary="Toggle between light and dark theme"
                 />
                 <Switch
                   edge="end"
@@ -216,8 +298,19 @@ const Settings: React.FC = () => {
                 />
               </ListItem>
             </List>
-            
+
             <Box sx={{ mt: 3 }}>
+              <Button
+                variant="outlined"
+                startIcon={<LockIcon />}
+                onClick={handlePasswordDialogOpen}
+                fullWidth
+              >
+                Change Password
+              </Button>
+            </Box>
+
+            <Box sx={{ mt: 2 }}>
               <Typography variant="body2" color="text.secondary">
                 For additional settings or administrative functions, please contact your administrator.
               </Typography>
@@ -238,12 +331,64 @@ const Settings: React.FC = () => {
           <Button onClick={handleDialogClose} color="inherit">
             Cancel
           </Button>
-          <Button onClick={handleBackupConfirm} color="primary" variant="contained">
+          <Button onClick={handleBackup} color="primary" variant="contained">
             Create Backup
           </Button>
         </DialogActions>
       </Dialog>
-      
+
+      {/* Change Password Dialog */}
+      <Dialog open={openPasswordDialog} onClose={handlePasswordDialogClose} maxWidth="sm" fullWidth>
+        <DialogTitle>Change Password</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <TextField
+              fullWidth
+              type="password"
+              label="Current Password"
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+              margin="normal"
+              autoFocus
+            />
+            <TextField
+              fullWidth
+              type="password"
+              label="New Password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              margin="normal"
+            />
+            <TextField
+              fullWidth
+              type="password"
+              label="Confirm New Password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              margin="normal"
+            />
+            {passwordError && (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                {passwordError}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handlePasswordDialogClose} color="inherit">
+            Cancel
+          </Button>
+          <Button
+            onClick={handlePasswordChange}
+            color="primary"
+            variant="contained"
+            disabled={!oldPassword || !newPassword || !confirmPassword}
+          >
+            Change Password
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Success/Error Messages */}
       <Snackbar
         open={!!error || !!success}

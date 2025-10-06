@@ -7,6 +7,16 @@ def init_db():
         conn = sqlite3.connect('inventory.db')
         cursor = conn.cursor()
 
+        # Create users table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('admin', 'editor', 'viewer')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+
         # Create items table
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS items (
@@ -65,6 +75,17 @@ def init_db():
         )
         ''')
 
+        conn.commit()
+
+        # Delete any existing admin user first
+        cursor.execute("DELETE FROM users WHERE username = 'admin'")
+        
+        # Initialize default admin user with plain password
+        cursor.execute("""
+        INSERT INTO users (username, password, role)
+        VALUES (?, ?, ?)
+        """, ('admin', '1234', 'admin'))
+        
         conn.commit()
         logging.info("Database initialized successfully")
     except sqlite3.Error as e:

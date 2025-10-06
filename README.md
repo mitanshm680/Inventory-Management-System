@@ -1,5 +1,102 @@
 # Inventory Management System
 
+A full-stack inventory management system with user authentication, role-based access control, and real-time data management.
+
+## Features
+
+- 📦 **Inventory Management** - Add, edit, delete, and track inventory items
+- 👥 **User Management** - Role-based access (Admin, Editor, Viewer)
+- 🏷️ **Groups/Categories** - Organize items by groups
+- 💰 **Price Tracking** - Track prices from multiple suppliers
+- 📊 **Dashboard** - View statistics and low stock alerts
+- 📈 **Reports** - Generate inventory reports
+- 🔐 **Authentication** - Secure JWT-based authentication
+
+## Tech Stack
+
+### Backend
+- **Python 3.x** with FastAPI
+- **SQLite** database
+- **JWT** authentication
+- **Uvicorn** ASGI server
+
+### Frontend
+- **React 18** with TypeScript
+- **Material-UI (MUI)** components
+- **Axios** for API calls
+- **React Router** for navigation
+
+## Quick Start
+
+### Prerequisites
+- Python 3.8+
+- Node.js 14+
+- npm or yarn
+
+### Installation & Running
+
+**Option 1: Automated (Recommended)**
+```bash
+python run.py
+```
+
+**Option 2: Manual**
+
+1. **Backend:**
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run backend server
+python api.py
+```
+
+2. **Frontend:**
+```bash
+# Navigate to frontend
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm start
+```
+
+### Default Login
+- **Username:** `admin`
+- **Password:** `1234`
+
+## Database Viewer
+
+To view the database contents:
+```bash
+python view_database.py
+```
+
+Install tabulate for better formatting:
+```bash
+pip install tabulate
+```
+
+## Troubleshooting
+
+### Login Issues
+1. Delete old database: Delete `inventory.db`, `inventory.db-shm`, `inventory.db-wal`
+2. Restart: `python run.py`
+3. Use default credentials: `admin` / `1234`
+
+### Frontend Errors
+- Refresh the page (Ctrl+F5)
+- Clear browser cache
+- Check browser console (F12) for errors
+
+## License
+
+This project is for educational purposes.
+
+# Inventory Management System (old content below)
+
 A full-stack inventory management system with a React frontend and FastAPI backend.
 
 ## Features

@@ -2,35 +2,20 @@
 
 from typing import Dict, Any, Optional
 from datetime import datetime
+from pydantic import BaseModel, Field
 
 
-class PriceEntry:
-    """Represents a price entry for an inventory item."""
+class PriceEntry(BaseModel):
+    """Model for price entries."""
+    item_name: str
+    price: float = Field(gt=0)
+    supplier: Optional[str] = None
+    date_updated: datetime = Field(default_factory=datetime.now)
+    is_unit_price: bool = True
     
-    def __init__(self, 
-                 item_name: str, 
-                 price: float, 
-                 supplier: Optional[str] = None,
-                 date_updated: Optional[datetime] = None,
-                 is_unit_price: bool = True,
-                 quantity: Optional[int] = None):
-        """
-        Initialize a price entry.
-        
-        Args:
-            item_name: The name of the item
-            price: The price of the item (unit price by default)
-            supplier: The supplier of the item (optional)
-            date_updated: When the price was updated (defaults to now)
-            is_unit_price: Whether the price is per unit (True) or total (False)
-            quantity: The quantity of the item at the time of the price entry
-        """
-        self.item_name = item_name
-        self.price = price
-        self.supplier = supplier
-        self.date_updated = date_updated or datetime.now()
-        self.is_unit_price = is_unit_price
-        self.quantity = quantity
+    def __init__(self, **data):
+        super().__init__(**data)
+        self.quantity = data.get('quantity')
     
     @classmethod
     def from_db_row(cls, row):

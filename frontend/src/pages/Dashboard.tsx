@@ -27,7 +27,7 @@ import {
   Legend,
   ArcElement 
 } from 'chart.js';
-import api from '../utils/api';
+import { apiService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { ChartData, InventoryItem } from '../types';
 
@@ -57,22 +57,24 @@ const Dashboard: React.FC = () => {
     const fetchDashboardData = async () => {
       try {
         // Get all inventory items
-        const inventoryResponse = await api.get('/inventory');
-        const inventory: InventoryItem[] = inventoryResponse.data;
-        
-        // Get all groups
-        const groupsResponse = await api.get('/groups');
-        const groups = groupsResponse.data;
-        
+        const inventory = await apiService.getInventory();
+
+        // Get all groups - API returns {groups: [...]}
+        const groupsResponse = await apiService.getGroups();
+        const groups = groupsResponse.groups || [];
+
         // Calculate low stock items (less than reorder point)
-        const lowStock = inventory.filter(item => 
+        const lowStock = inventory.filter((item: InventoryItem) =>
           item.quantity < (item.reorder_point || 10));
-        
+
         // Get recently added items (last 5)
-        const sortedInventory = [...inventory].sort((a, b) => 
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const sortedInventory = [...inventory].sort((a, b) => {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return dateB - dateA;
+        });
         const recentItems = sortedInventory.slice(0, 5);
-        
+
         setStats({
           totalItems: inventory.length,
           totalGroups: groups.length,
@@ -82,7 +84,7 @@ const Dashboard: React.FC = () => {
         
         // Prepare data for chart
         const categoryMap: Record<string, number> = {};
-        inventory.forEach(item => {
+        inventory.forEach((item: InventoryItem) => {
           const category = item.category || 'Uncategorized';
           if (!categoryMap[category]) {
             categoryMap[category] = 0;
@@ -424,7 +426,7 @@ const Dashboard: React.FC = () => {
                       <Box>
                         <Typography variant="body2">{item.name || item.item_name}</Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {new Date(item.created_at).toLocaleDateString()}
+                          {item.created_at ? new Date(item.created_at).toLocaleDateString() : 'N/A'}
                         </Typography>
                       </Box>
                     </Box>

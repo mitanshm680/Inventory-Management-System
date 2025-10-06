@@ -32,17 +32,25 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import GroupsIcon from '@mui/icons-material/Groups';
 import { useAuth } from '../contexts/AuthContext';
 import { Group } from '../types';
-import api from '../utils/api';
+import { apiService } from '../services/api';
+
+interface ExtendedGroup {
+  group_name: string;
+  name: string;
+  description?: string;
+  created_at?: string;
+  itemCount: number;
+}
 
 const Groups: React.FC = () => {
   const { user } = useAuth();
-  const [groups, setGroups] = useState<Group[]>([]);
+  const [groups, setGroups] = useState<ExtendedGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [searchTerm, setSearchTerm] = useState('');
   const [openDialog, setOpenDialog] = useState(false);
-  const [currentGroup, setCurrentGroup] = useState<Group | null>(null);
+  const [currentGroup, setCurrentGroup] = useState<ExtendedGroup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -62,31 +70,40 @@ const Groups: React.FC = () => {
   const fetchGroups = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/groups');
-      
+      const response = await apiService.getGroups();
+
+      // API returns {groups: [...]}
+      const groupsList = response.groups || [];
+
       // Map API response to Group interface format
-      const groupsData = response.data.groups || [];
-      const mappedGroups = groupsData.map((group: any) => ({
-        id: group.id || group.group_name, // Use group_name as id if id is not present
-        name: group.group_name,  // backend uses group_name
+      const mappedGroups = groupsList.map((group: any) => ({
+        group_name: group.group_name,
+        name: group.group_name,
         description: group.description || '',
-        created_at: group.created_at || new Date().toISOString(),
-        updated_at: group.updated_at || new Date().toISOString()
+        itemCount: 0
       }));
-      
-      setGroups(mappedGroups);
-      
+
       // Get item counts per group
-      const inventoryResponse = await api.get('/inventory');
-      const inventory = inventoryResponse.data;
-      
+      const inventoryItems = await apiService.getInventory();
+
+      // Update item counts
+      mappedGroups.forEach((group: ExtendedGroup) => {
+        group.itemCount = inventoryItems.filter((item: any) =>
+          item.group_name === group.name
+        ).length;
+      });
+
+      setGroups(mappedGroups);
+
+      // Get item counts per group
       const groupCounts: Record<string, number> = {};
-      inventory.forEach((item: any) => {
-        if (item.group) {
-          if (!groupCounts[item.group]) {
-            groupCounts[item.group] = 0;
+      inventoryItems.forEach((item: any) => {
+        const groupName = item.group_name;
+        if (groupName) {
+          if (!groupCounts[groupName]) {
+            groupCounts[groupName] = 0;
           }
-          groupCounts[item.group]++;
+          groupCounts[groupName]++;
         }
       });
       
@@ -131,16 +148,16 @@ const Groups: React.FC = () => {
     setOpenDialog(true);
   };
 
-  const handleEditClick = (group: Group) => {
+  const handleEditClick = (group: ExtendedGroup) => {
     setCurrentGroup(group);
     setFormData({
-      name: group.name,
-      description: group.description
+      name: group.name || '',
+      description: group.description || ''
     });
     setOpenDialog(true);
   };
 
-  const handleDeleteClick = (group: Group) => {
+  const handleDeleteClick = (group: ExtendedGroup) => {
     setDeleteGroupId(group.name);
     setIsDeleting(true);
   };
@@ -148,14 +165,16 @@ const Groups: React.FC = () => {
   const handleDelete = async () => {
     if (!deleteGroupId) return;
     
+    setError('');
+    setSuccess('');
     try {
       // Use the DELETE endpoint to remove the group
-      await api.delete(`/groups/${deleteGroupId}`);
+      await apiService.deleteGroup(deleteGroupId);
       setSuccess(`Group "${deleteGroupId}" has been deleted`);
       fetchGroups(); // Refresh groups
-    } catch (err) {
-      console.error('Error deleting group:', err);
-      setError('Failed to delete group. Please try again.');
+    } catch (error) {
+      console.error('Error deleting group:', error);
+      setError('Failed to delete group');
     } finally {
       setIsDeleting(false);
       setDeleteGroupId(null);
@@ -166,25 +185,29 @@ const Groups: React.FC = () => {
     setOpenDialog(false);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (formData: GroupFormData) => {
+    setError('');
+    setSuccess('');
     try {
       if (currentGroup) {
         // Update existing group
-        await api.put(`/groups/${currentGroup.name}?new_name=${formData.name}`);
+        await apiService.updateGroup(currentGroup.name, formData.name);
         setSuccess(`Group "${currentGroup.name}" has been renamed to "${formData.name}"`);
       } else {
         // Add new group
-        await api.post('/groups', {
+        await apiService.createGroup({
           group_name: formData.name,
           description: formData.description
         });
-        setSuccess(`Group "${formData.name}" has been added`);
+        setSuccess(`Group "${formData.name}" has been created`);
       }
+      fetchGroups(); // Refresh groups list
+    } catch (error) {
+      console.error('Error saving group:', error);
+      setError('Failed to save group');
+    } finally {
       setOpenDialog(false);
-      fetchGroups(); // Refresh groups
-    } catch (err) {
-      console.error('Error saving group:', err);
-      setError('Failed to save group. Please check your input and try again.');
+      setCurrentGroup(null);
     }
   };
 
@@ -359,7 +382,7 @@ const Groups: React.FC = () => {
           <Button onClick={handleDialogClose} color="inherit">
             Cancel
           </Button>
-          <Button onClick={handleSubmit} color="primary" variant="contained">
+          <Button onClick={() => handleSubmit(formData)} color="primary" variant="contained">
             {currentGroup ? 'Update' : 'Add'}
           </Button>
         </DialogActions>
@@ -406,5 +429,10 @@ const Groups: React.FC = () => {
     </Container>
   );
 };
+
+interface GroupFormData {
+  name: string;
+  description: string;
+}
 
 export default Groups; 

@@ -1,60 +1,39 @@
 # models/user.py
 
-import hashlib
-from typing import Dict, Optional
+from typing import Optional
+from datetime import datetime
+from pydantic import BaseModel, Field, validator
 
-
-class User:
-    """Represents a system user."""
+class User(BaseModel):
+    """Model for system users."""
+    username: str = Field(..., description="User's username")
+    password_hash: str = Field(..., description="Hash of the user's password")
+    role: str = Field(default='viewer', description="User's role (admin, editor, or viewer)")
+    created_at: datetime = Field(default_factory=datetime.now, description="When the user was created")
     
-    ROLES = ['admin', 'editor', 'viewer']  # Available user roles
-    
-    def __init__(self, username: str, password_hash: str, role: str = 'viewer'):
-        """
-        Initialize a User.
-        
-        Args:
-            username: User's username
-            password_hash: Hash of the user's password
-            role: User's role (admin, editor, or viewer)
-        """
-        self.username = username
-        self.password_hash = password_hash
-        
-        if role not in self.ROLES:
-            raise ValueError(f"Invalid role: {role}. Must be one of {self.ROLES}")
-        self.role = role
+    @validator('role')
+    def validate_role(cls, v):
+        """Validate the user role."""
+        valid_roles = ['admin', 'editor', 'viewer']
+        if v not in valid_roles:
+            raise ValueError(f"Invalid role: {v}. Must be one of {valid_roles}")
+        return v
     
     @classmethod
     def create(cls, username: str, plaintext_password: str, role: str = 'viewer'):
-        """
-        Create a new user with a hashed password.
-        
-        Args:
-            username: User's username
-            plaintext_password: User's password (will be hashed)
-            role: User's role
-        
-        Returns:
-            User: A new User instance
-        """
-        password_hash = hashlib.sha256(plaintext_password.encode()).hexdigest()
-        return cls(username, password_hash, role)
+        """Create a new user with a hashed password."""
+        from passlib.context import CryptContext
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        password_hash = pwd_context.hash(plaintext_password)
+        return cls(username=username, password_hash=password_hash, role=role)
     
     def check_password(self, plaintext_password: str) -> bool:
-        """
-        Check if the provided password matches the stored hash.
-        
-        Args:
-            plaintext_password: Password to check
-        
-        Returns:
-            bool: True if password matches, False otherwise
-        """
-        password_hash = hashlib.sha256(plaintext_password.encode()).hexdigest()
-        return self.password_hash == password_hash
+        """Check if the provided password matches the stored hash."""
+        from passlib.context import CryptContext
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        return pwd_context.verify(plaintext_password, self.password_hash)
     
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self):
         """
         Convert the user to a dictionary.
         
@@ -68,7 +47,7 @@ class User:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, str]):
+    def from_dict(cls, data: dict):
         """
         Create a User from a dictionary.
         

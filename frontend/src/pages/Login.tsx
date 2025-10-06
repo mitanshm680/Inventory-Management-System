@@ -197,7 +197,7 @@ const Login: React.FC = () => {
           
           <Box sx={{ mt: 2, textAlign: 'center' }}>
             <Typography variant="body2" color="text.secondary">
-              Default login: user / 1234
+              Default login: admin / 1234
             </Typography>
           </Box>
         </Paper>

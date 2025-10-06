@@ -34,9 +34,18 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import FilterListIcon from '@mui/icons-material/FilterList';
+import HistoryIcon from '@mui/icons-material/History';
 import { useAuth } from '../contexts/AuthContext';
 import { InventoryItem, Group } from '../types';
-import api from '../utils/api';
+import { apiService } from '../services/api';
+
+interface InventoryFormData {
+  item_name: string;
+  quantity: number;
+  group?: string;
+  reorder_point?: number;
+  custom_fields?: Record<string, any>;
+}
 
 const Inventory: React.FC = () => {
   const { user } = useAuth();
@@ -53,6 +62,10 @@ const Inventory: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteItemId, setDeleteItemId] = useState<string | null>(null);
+  const [openHistoryDialog, setOpenHistoryDialog] = useState(false);
+  const [historyItemName, setHistoryItemName] = useState<string>('');
+  const [historyData, setHistoryData] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Form states for add/edit
   const [formData, setFormData] = useState<Partial<InventoryItem>>({
@@ -71,12 +84,12 @@ const Inventory: React.FC = () => {
   const fetchInventoryData = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/inventory');
-      setItems(response.data);
+      const items = await apiService.getInventory();
+      setItems(items);
       setError(null);
     } catch (err) {
       console.error('Error fetching inventory:', err);
-      setError('Failed to load inventory data. Please try again.');
+      setError('Failed to fetch inventory');
     } finally {
       setLoading(false);
     }
@@ -84,10 +97,12 @@ const Inventory: React.FC = () => {
 
   const fetchGroups = async () => {
     try {
-      const response = await api.get('/groups');
-      setGroups(response.data.groups || []);
+      const response = await apiService.getGroups();
+      // API returns {groups: [...]}
+      setGroups(response.groups || []);
     } catch (err) {
       console.error('Error fetching groups:', err);
+      setGroups([]);
     }
   };
 
@@ -158,12 +173,12 @@ const Inventory: React.FC = () => {
     if (!deleteItemId) return;
     
     try {
-      await api.delete(`/inventory/${deleteItemId}`);
+      await apiService.deleteItem(deleteItemId);
       setSuccess(`Item "${deleteItemId}" has been deleted`);
       fetchInventoryData(); // Refresh inventory
     } catch (err) {
       console.error('Error deleting item:', err);
-      setError('Failed to delete item. Please try again.');
+      setError('Failed to delete item');
     } finally {
       setIsDeleting(false);
       setDeleteItemId(null);
@@ -174,22 +189,33 @@ const Inventory: React.FC = () => {
     setOpenDialog(false);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (formData: InventoryFormData) => {
     try {
+      // Transform group to group_name for API
+      const apiData = {
+        item_name: formData.item_name,
+        quantity: formData.quantity,
+        group_name: formData.group || null,
+        reorder_point: formData.reorder_point,
+        custom_fields: formData.custom_fields
+      };
+
       if (currentItem) {
         // Update existing item
-        await api.put(`/inventory/${currentItem.item_name}`, formData);
+        await apiService.updateItem(currentItem.item_name, apiData);
         setSuccess(`Item "${formData.item_name}" has been updated`);
       } else {
         // Add new item
-        await api.post('/inventory', formData);
+        await apiService.addItem(apiData);
         setSuccess(`Item "${formData.item_name}" has been added`);
       }
-      setOpenDialog(false);
-      fetchInventoryData(); // Refresh inventory
+      fetchInventoryData(); // Refresh inventory list
     } catch (err) {
       console.error('Error saving item:', err);
-      setError('Failed to save item. Please check your input and try again.');
+      setError('Failed to save item');
+    } finally {
+      setOpenDialog(false);
+      setCurrentItem(null);
     }
   };
 
@@ -198,10 +224,32 @@ const Inventory: React.FC = () => {
     setSuccess(null);
   };
 
+  const handleHistoryClick = async (itemName: string) => {
+    setHistoryItemName(itemName);
+    setOpenHistoryDialog(true);
+    setLoadingHistory(true);
+    try {
+      const response = await apiService.get(`/inventory/${itemName}/history`);
+      setHistoryData(response.history || []);
+    } catch (err) {
+      console.error('Error fetching history:', err);
+      setHistoryData([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const handleHistoryDialogClose = () => {
+    setOpenHistoryDialog(false);
+    setHistoryData([]);
+    setHistoryItemName('');
+  };
+
   // Filter items based on search term and selected group
   const filteredItems = items.filter(item => {
     const matchesSearch = item.item_name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesGroup = !selectedGroup || item.group === selectedGroup;
+    const itemGroup = item.group_name || '';
+    const matchesGroup = !selectedGroup || itemGroup === selectedGroup;
     return matchesSearch && matchesGroup;
   });
 
@@ -247,8 +295,8 @@ const Inventory: React.FC = () => {
                 >
                   <MenuItem value="">All Groups</MenuItem>
                   {groups.map((group) => (
-                    <MenuItem key={group.id} value={group.name}>
-                      {group.name}
+                    <MenuItem key={group.group_name} value={group.group_name}>
+                      {group.group_name}
                     </MenuItem>
                   ))}
                 </Select>
@@ -285,6 +333,7 @@ const Inventory: React.FC = () => {
                     <TableCell>Group</TableCell>
                     <TableCell align="right">Reorder Point</TableCell>
                     <TableCell>Last Updated</TableCell>
+                    <TableCell align="center">History</TableCell>
                     {canEdit && <TableCell align="center">Actions</TableCell>}
                   </TableRow>
                 </TableHead>
@@ -308,10 +357,20 @@ const Inventory: React.FC = () => {
                             )}
                           </Box>
                         </TableCell>
-                        <TableCell>{item.group || 'Uncategorized'}</TableCell>
+                        <TableCell>{item.group_name || 'Uncategorized'}</TableCell>
                         <TableCell align="right">{item.reorder_point || 10}</TableCell>
                         <TableCell>
-                          {new Date(item.updated_at || item.created_at).toLocaleDateString()}
+                          {(item.updated_at || item.created_at) ? new Date(item.updated_at || item.created_at!).toLocaleDateString() : 'N/A'}
+                        </TableCell>
+                        <TableCell align="center">
+                          <IconButton
+                            color="info"
+                            onClick={() => handleHistoryClick(item.item_name)}
+                            size="small"
+                            title="View History"
+                          >
+                            <HistoryIcon />
+                          </IconButton>
                         </TableCell>
                         {canEdit && (
                           <TableCell align="center">
@@ -337,7 +396,7 @@ const Inventory: React.FC = () => {
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={canEdit ? 6 : 5} align="center">
+                      <TableCell colSpan={canEdit ? 7 : 6} align="center">
                         No inventory items found
                       </TableCell>
                     </TableRow>
@@ -409,8 +468,8 @@ const Inventory: React.FC = () => {
                   >
                     <MenuItem value="">None</MenuItem>
                     {groups.map((group) => (
-                      <MenuItem key={group.id} value={group.name}>
-                        {group.name}
+                      <MenuItem key={group.group_name} value={group.group_name}>
+                        {group.group_name}
                       </MenuItem>
                     ))}
                   </Select>
@@ -423,7 +482,7 @@ const Inventory: React.FC = () => {
           <Button onClick={handleDialogClose} color="inherit">
             Cancel
           </Button>
-          <Button onClick={handleSubmit} color="primary" variant="contained">
+          <Button onClick={() => handleSubmit(formData as InventoryFormData)} color="primary" variant="contained">
             {currentItem ? 'Update' : 'Add'}
           </Button>
         </DialogActions>
@@ -443,6 +502,64 @@ const Inventory: React.FC = () => {
           </Button>
           <Button onClick={handleDelete} color="error" variant="contained">
             Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* History Dialog */}
+      <Dialog open={openHistoryDialog} onClose={handleHistoryDialogClose} maxWidth="md" fullWidth>
+        <DialogTitle>
+          Item History: {historyItemName}
+        </DialogTitle>
+        <DialogContent>
+          {loadingHistory ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+              <CircularProgress />
+            </Box>
+          ) : historyData.length > 0 ? (
+            <TableContainer sx={{ mt: 2 }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Action</TableCell>
+                    <TableCell align="right">Quantity</TableCell>
+                    <TableCell>Group</TableCell>
+                    <TableCell>Timestamp</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {historyData.map((entry, index) => (
+                    <TableRow key={index}>
+                      <TableCell>
+                        <Chip
+                          label={entry.action}
+                          size="small"
+                          color={
+                            entry.action === 'ADD' || entry.action === 'CREATE'
+                              ? 'success'
+                              : entry.action === 'REMOVE' || entry.action === 'DELETE'
+                              ? 'error'
+                              : 'default'
+                          }
+                        />
+                      </TableCell>
+                      <TableCell align="right">{entry.quantity || '-'}</TableCell>
+                      <TableCell>{entry.group_name || '-'}</TableCell>
+                      <TableCell>{new Date(entry.timestamp).toLocaleString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          ) : (
+            <Typography sx={{ p: 3, textAlign: 'center' }} color="textSecondary">
+              No history found for this item
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleHistoryDialogClose} color="primary">
+            Close
           </Button>
         </DialogActions>
       </Dialog>

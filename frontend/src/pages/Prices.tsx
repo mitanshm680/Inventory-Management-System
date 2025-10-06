@@ -43,7 +43,7 @@ import SavingsIcon from '@mui/icons-material/Savings';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { useAuth } from '../contexts/AuthContext';
 import { InventoryItem } from '../types';
-import api from '../utils/api';
+import { apiService } from '../services/api';
 
 interface PriceEntry {
   id: number;
@@ -58,6 +58,11 @@ interface PriceHistory {
   date: string;
   price: number;
   supplier: string;
+}
+
+interface CheapestSupplier {
+  supplier: string;
+  price: number;
 }
 
 const Prices: React.FC = () => {
@@ -77,14 +82,15 @@ const Prices: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteItemName, setDeleteItemName] = useState<string | null>(null);
   const [deleteSupplier, setDeleteSupplier] = useState<string | null>(null);
-  const [cheapestSuppliers, setCheapestSuppliers] = useState<Record<string, { supplier: string, price: number }>>({});
+  const [cheapestSuppliers, setCheapestSuppliers] = useState<Record<string, CheapestSupplier>>({});
 
   // Form states for add/edit
   const [formData, setFormData] = useState({
     item_name: '',
     price: 0,
     supplier: '',
-    is_unit_price: true
+    is_unit_price: true,
+    notes: ''
   });
 
   useEffect(() => {
@@ -95,33 +101,29 @@ const Prices: React.FC = () => {
   const fetchPrices = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/prices');
-      setPrices(response.data);
+      const prices = await apiService.getPrices();
+      setPrices(prices);
       
-      // Get cheapest suppliers for each item
-      const cheapest: Record<string, { supplier: string, price: number }> = {};
-      
-      // Process items one by one to avoid overwhelming the server with requests
-      for (const itemName of Object.keys(response.data)) {
+      // Get cheapest suppliers
+      const cheapest: { [key: string]: CheapestSupplier } = {};
+      for (const itemName of Object.keys(prices)) {
         try {
-          const cheapestResponse = await api.get(`/prices/${itemName}/cheapest`);
-          if (cheapestResponse.data && cheapestResponse.data.supplier) {
+          const cheapestPrice = await apiService.getCheapestPrice(itemName);
+          if (cheapestPrice && cheapestPrice.supplier) {
             cheapest[itemName] = {
-              supplier: cheapestResponse.data.supplier,
-              price: cheapestResponse.data.price
+              supplier: cheapestPrice.supplier,
+              price: cheapestPrice.price
             };
           }
         } catch (err) {
-          console.log(`No cheapest supplier data available for ${itemName}`);
-          // Just skip items that don't have cheapest supplier data
+          console.error(`Error getting cheapest price for ${itemName}:`, err);
         }
       }
-      
       setCheapestSuppliers(cheapest);
       setError(null);
     } catch (err) {
       console.error('Error fetching prices:', err);
-      setError('Failed to load price data. Please try again.');
+      setError('Failed to fetch prices');
     } finally {
       setLoading(false);
     }
@@ -129,22 +131,22 @@ const Prices: React.FC = () => {
 
   const fetchInventory = async () => {
     try {
-      const response = await api.get('/inventory');
-      setItems(response.data);
+      const items = await apiService.getInventory();
+      setItems(items);
     } catch (err) {
-      console.error('Error fetching inventory items:', err);
+      console.error('Error fetching inventory:', err);
     }
   };
 
   const fetchPriceHistory = async (itemName: string) => {
     try {
-      const response = await api.get(`/prices/${itemName}/history`);
-      setPriceHistory(response.data);
+      const history = await apiService.getPriceHistory(itemName);
+      setPriceHistory(history);
       setSelectedItem(itemName);
       setHistoryDialog(true);
     } catch (err) {
       console.error('Error fetching price history:', err);
-      setError(`Failed to load price history for ${itemName}`);
+      setError('Failed to fetch price history');
     }
   };
 
@@ -189,7 +191,8 @@ const Prices: React.FC = () => {
       item_name: itemName || '',
       price: 0,
       supplier: '',
-      is_unit_price: true
+      is_unit_price: true,
+      notes: ''
     });
     setOpenDialog(true);
   };
@@ -204,16 +207,16 @@ const Prices: React.FC = () => {
     if (!deleteItemName) return;
     
     try {
-      const endpoint = deleteSupplier
-        ? `/prices/${deleteItemName}?supplier=${deleteSupplier}`
-        : `/prices/${deleteItemName}`;
-        
-      await api.delete(endpoint);
+      if (deleteSupplier) {
+        await apiService.deletePrice(deleteItemName, deleteSupplier);
+      } else {
+        await apiService.deleteAllPrices(deleteItemName);
+      }
       setSuccess(`Price ${deleteSupplier ? `for ${deleteItemName} from supplier ${deleteSupplier}` : `entries for ${deleteItemName}`} deleted`);
       fetchPrices(); // Refresh prices
     } catch (err) {
       console.error('Error deleting price:', err);
-      setError('Failed to delete price. Please try again.');
+      setError('Failed to delete price');
     } finally {
       setIsDeleting(false);
       setDeleteItemName(null);
@@ -233,18 +236,17 @@ const Prices: React.FC = () => {
 
   const handleSubmit = async () => {
     try {
-      await api.put(`/prices/${formData.item_name}`, {
+      await apiService.updatePrice(formData.item_name, {
         price: formData.price,
         supplier: formData.supplier,
-        is_unit_price: formData.is_unit_price
+        notes: formData.notes
       });
-      
-      setSuccess(`Price for ${formData.item_name} has been updated`);
+      setSuccess(`Price for "${formData.item_name}" has been updated`);
       setOpenDialog(false);
       fetchPrices(); // Refresh prices
     } catch (err) {
-      console.error('Error saving price:', err);
-      setError('Failed to save price. Please check your input and try again.');
+      console.error('Error updating price:', err);
+      setError('Failed to update price');
     }
   };
 
@@ -257,7 +259,7 @@ const Prices: React.FC = () => {
   const flattenedPrices: Array<{
     item_name: string;
     entries: PriceEntry[];
-    cheapest?: { supplier: string; price: number };
+    cheapest?: CheapestSupplier;
   }> = Object.keys(prices)
     .filter(itemName => itemName.toLowerCase().includes(searchTerm.toLowerCase()))
     .map(itemName => ({

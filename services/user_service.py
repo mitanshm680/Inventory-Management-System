@@ -1,187 +1,232 @@
 # services/user_service.py
 
-import json
 import logging
+import hashlib
 from typing import Dict, List, Optional
-
-from models.user import User
-
+from database.db_connection import DBConnection
 
 class UserService:
-    """Service class for user operations."""
+    def __init__(self):
+        self.db = DBConnection()
+        self._ensure_users_table()
+        self._ensure_admin_user()
     
-    def __init__(self, userfile='users.json'):
-        """
-        Initialize the user service.
-        
-        Args:
-            userfile: Path to the users JSON file
-        """
-        self.userfile = userfile
-        self.users: Dict[str, User] = {}
-        self._load_users()
-    
-    def _load_users(self) -> None:
-        """Load users from the JSON file."""
+    def _ensure_users_table(self):
+        """Ensure the users table exists."""
         try:
-            with open(self.userfile, 'r') as f:
-                user_data = json.load(f)
-                
-            self.users = {}
-            for username, details in user_data.items():
-                self.users[username] = User(
-                    username=username,
-                    password_hash=details['password'],
-                    role=details.get('role', 'viewer')
-                )
-                
-        except FileNotFoundError:
-            # Create default admin user if file doesn't exist
-            default_user = User.create('user', '1234', 'admin')
-            self.users = {default_user.username: default_user}
-            self._save_users()
-            logging.info("Created default user with username 'user' and password '1234'")
+            with self.db.get_cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        username TEXT PRIMARY KEY,
+                        password TEXT NOT NULL,
+                        role TEXT NOT NULL CHECK(role IN ('admin', 'editor', 'viewer')),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+        except Exception as e:
+            logging.error(f"Error creating users table: {e}")
+            raise
     
-    def _save_users(self) -> None:
-        """Save users to the JSON file."""
-        user_data = {}
-        for username, user in self.users.items():
-            user_data[username] = {
-                'password': user.password_hash,
-                'role': user.role
-            }
-            
-        with open(self.userfile, 'w') as f:
-            json.dump(user_data, f, indent=4)
-    
-    def add_user(self, username: str, password: str, role: str = 'viewer') -> bool:
-        """
-        Add a new user.
-        
-        Args:
-            username: Username for the new user
-            password: Password for the new user
-            role: Role for the new user
-        
-        Returns:
-            bool: True if successful, False if username already exists
-        """
-        if username in self.users:
-            logging.warning(f"User already exists: {username}")
-            return False
-            
-        self.users[username] = User.create(username, password, role)
-        self._save_users()
-        logging.info(f"User added successfully: {username}")
-        return True
+    def _ensure_admin_user(self):
+        """Ensure default admin user exists with username: admin, password: 1234."""
+        try:
+            with self.db.get_cursor() as cursor:
+                cursor.execute("SELECT 1 FROM users WHERE username = 'admin' LIMIT 1")
+                if not cursor.fetchone():
+                    # Create default admin user with SHA-256 hashed password
+                    hashed_password = hashlib.sha256("1234".encode()).hexdigest()
+                    cursor.execute(
+                        "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+                        ("admin", hashed_password, "admin")
+                    )
+                    logging.info("Created default admin user (username: admin, password: 1234)")
+        except Exception as e:
+            logging.error(f"Error ensuring admin user: {e}")
+            raise
     
     def authenticate(self, username: str, password: str) -> Optional[str]:
-        """
-        Authenticate a user.
-        
-        Args:
-            username: Username to authenticate
-            password: Password to check
-            
-        Returns:
-            Optional[str]: User's role if authentication successful, None otherwise
-        """
-        if username in self.users and self.users[username].check_password(password):
-            logging.info(f"Authentication successful for user: {username}")
-            return self.users[username].role
-            
-        logging.warning(f"Authentication failed for user: {username}")
-        return None
+        """Authenticate a user using SHA-256 password hashing."""
+        try:
+            with self.db.get_cursor() as cursor:
+                cursor.execute(
+                    "SELECT password, role FROM users WHERE username = ?",
+                    (username,)
+                )
+                user = cursor.fetchone()
+
+                if user:
+                    stored_password = user['password']
+                    hashed_input = hashlib.sha256(password.encode()).hexdigest()
+
+                    if stored_password == hashed_input:
+                        logging.info(f"User '{username}' authenticated successfully")
+                        return user['role']
+                    else:
+                        logging.warning(f"Failed authentication attempt for user '{username}'")
+
+                return None
+        except Exception as e:
+            logging.error(f"Error authenticating user: {e}")
+            raise
     
-    def change_password(self, username: str, new_password: str) -> bool:
-        """
-        Change a user's password.
-        
-        Args:
-            username: Username whose password to change
-            new_password: New password to set
-            
-        Returns:
-            bool: True if successful, False if user not found
-        """
-        if username not in self.users:
-            logging.warning(f"User not found: {username}")
+    def add_user(self, username: str, password: str, role: str = "viewer") -> bool:
+        """Add a new user (legacy method name)."""
+        try:
+            self.create_user(username, password, role)
+            return True
+        except:
             return False
-            
-        self.users[username] = User.create(
-            username, 
-            new_password, 
-            self.users[username].role
-        )
-        self._save_users()
-        logging.info(f"Password changed successfully for user: {username}")
-        return True
-    
-    def delete_user(self, username: str) -> bool:
-        """
-        Delete a user.
-        
-        Args:
-            username: Username to delete
-            
-        Returns:
-            bool: True if successful, False if user not found
-        """
-        if username not in self.users:
-            logging.warning(f"User not found: {username}")
-            return False
-            
-        del self.users[username]
-        self._save_users()
-        logging.info(f"User deleted successfully: {username}")
-        return True
-    
-    def get_users(self) -> List[Dict[str, str]]:
-        """
-        Get all users.
-        
-        Returns:
-            List[Dict[str, str]]: List of users as dictionaries with username and role
-        """
-        return [
-            {'username': username, 'role': user.role}
-            for username, user in self.users.items()
-        ]
+
+    def create_user(self, username: str, password: str, role: str = "viewer") -> Dict[str, str]:
+        """Create a new user with SHA-256 password hashing."""
+        try:
+            with self.db.get_cursor() as cursor:
+                # Check if user exists
+                cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+                if cursor.fetchone():
+                    raise ValueError(f"User '{username}' already exists")
+
+                # Validate role
+                if role not in ["admin", "editor", "viewer"]:
+                    raise ValueError("Invalid role")
+
+                # Hash password with SHA-256 and create user
+                hashed_password = hashlib.sha256(password.encode()).hexdigest()
+                cursor.execute(
+                    "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+                    (username, hashed_password, role)
+                )
+
+                logging.info(f"User '{username}' created with role '{role}'")
+                return {"username": username, "role": role}
+        except Exception as e:
+            logging.error(f"Error creating user: {e}")
+            raise
     
     def change_role(self, username: str, new_role: str) -> bool:
-        """
-        Change a user's role.
-        
-        Args:
-            username: Username whose role to change
-            new_role: New role to set
-            
-        Returns:
-            bool: True if successful, False if user not found or role invalid
-        """
-        if username not in self.users:
-            logging.warning(f"User not found: {username}")
+        """Change a user's role (legacy method name)."""
+        try:
+            self.update_user(username, role=new_role)
+            return True
+        except:
             return False
-            
-        if new_role not in User.ROLES:
-            logging.warning(f"Invalid role: {new_role}")
+
+    def update_user(self, username: str, role: Optional[str] = None) -> Dict[str, str]:
+        """Update a user's role."""
+        try:
+            with self.db.get_cursor() as cursor:
+                # Check if user exists
+                cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
+                user = cursor.fetchone()
+                if not user:
+                    raise ValueError(f"User '{username}' not found")
+                
+                if role:
+                    # Validate role
+                    if role not in ["admin", "editor", "viewer"]:
+                        raise ValueError("Invalid role")
+                    
+                    # Ensure at least one admin remains
+                    if user['role'] == 'admin' and role != 'admin':
+                        cursor.execute("SELECT COUNT(*) as count FROM users WHERE role = 'admin'")
+                        if cursor.fetchone()['count'] <= 1:
+                            raise ValueError("Cannot remove the last admin user")
+                    
+                    # Update role
+                    cursor.execute(
+                        "UPDATE users SET role = ? WHERE username = ?",
+                        (role, username)
+                    )
+                
+                return {"username": username, "role": role or user['role']}
+        except Exception as e:
+            logging.error(f"Error updating user: {e}")
+            raise
+    
+    def delete_user(self, username: str) -> bool:
+        """Delete a user."""
+        try:
+            with self.db.get_cursor() as cursor:
+                # Check if user exists and is admin
+                cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
+                user = cursor.fetchone()
+                if not user:
+                    raise ValueError(f"User '{username}' not found")
+                
+                # Prevent deleting the last admin
+                if user['role'] == 'admin':
+                    cursor.execute("SELECT COUNT(*) as count FROM users WHERE role = 'admin'")
+                    if cursor.fetchone()['count'] <= 1:
+                        raise ValueError("Cannot delete the last admin user")
+                
+                # Delete user
+                cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+                return True
+        except Exception as e:
+            logging.error(f"Error deleting user: {e}")
             return False
-            
-        self.users[username].role = new_role
-        self._save_users()
-        logging.info(f"Role changed successfully for user {username} to {new_role}")
-        return True
     
     def get_user(self, username: str) -> Optional[Dict[str, str]]:
-        """
-        Get a specific user.
-        
-        Args:
-            username: Username to get
-            
-        Returns:
-            Optional[Dict[str, str]]: User as dictionary with username and role if found, None otherwise
-        """
-        if username in self.users:
-            return {'username': username, 'role': self.users[username].role}
-        return None 
+        """Get user information."""
+        try:
+            with self.db.get_cursor() as cursor:
+                cursor.execute(
+                    "SELECT username, role FROM users WHERE username = ?",
+                    (username,)
+                )
+                user = cursor.fetchone()
+                return dict(user) if user else None
+        except Exception as e:
+            logging.error(f"Error getting user: {e}")
+            raise
+    
+    def get_users(self) -> List[Dict[str, str]]:
+        """Get all users (legacy method name)."""
+        return self.get_all_users()
+
+    def get_all_users(self) -> List[Dict[str, str]]:
+        """Get all users."""
+        try:
+            with self.db.get_cursor() as cursor:
+                cursor.execute("SELECT username, role FROM users")
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logging.error(f"Error getting all users: {e}")
+            raise
+    
+    def update_password(self, username: str, new_password: str) -> None:
+        """Update a user's password using SHA-256 hashing."""
+        try:
+            with self.db.get_cursor() as cursor:
+                # Check if user exists
+                cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+                if not cursor.fetchone():
+                    raise ValueError(f"User '{username}' not found")
+
+                # Hash password with SHA-256 and update
+                hashed_password = hashlib.sha256(new_password.encode()).hexdigest()
+                cursor.execute(
+                    "UPDATE users SET password = ? WHERE username = ?",
+                    (hashed_password, username)
+                )
+
+                logging.info(f"Password updated for user '{username}'")
+        except Exception as e:
+            logging.error(f"Error updating password: {e}")
+            raise
+
+    def change_password(self, username: str, old_password: str, new_password: str) -> bool:
+        """Change password with old password verification."""
+        try:
+            # Verify old password first
+            if not self.authenticate(username, old_password):
+                logging.warning(f"Failed password change attempt for '{username}': invalid old password")
+                raise ValueError("Current password is incorrect")
+
+            # Update to new password
+            self.update_password(username, new_password)
+            logging.info(f"Password changed successfully for user '{username}'")
+            return True
+        except Exception as e:
+            logging.error(f"Error changing password: {e}")
+            raise 

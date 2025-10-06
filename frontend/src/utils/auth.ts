@@ -1,5 +1,6 @@
-import api from './api';
+import { apiService } from '../services/api';
 import { User } from '../types';
+import { AUTH_CONFIG } from '../config';
 
 interface TokenResponse {
   access_token: string;
@@ -7,23 +8,8 @@ interface TokenResponse {
 
 export const login = async (username: string, password: string): Promise<TokenResponse> => {
   try {
-    // Use URLSearchParams instead of FormData for compatibility with FastAPI
-    const formData = new URLSearchParams();
-    formData.append('username', username);
-    formData.append('password', password);
-
-    const response = await api.post<TokenResponse>('/token', formData, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-    });
-    
-    if (response.data && response.data.access_token) {
-      localStorage.setItem('token', response.data.access_token);
-      return response.data;
-    } else {
-      throw new Error('Invalid token response');
-    }
+    const response = await apiService.login(username, password);
+    return response.data;
   } catch (error) {
     console.error('Login error:', error);
     throw error;
@@ -31,13 +17,14 @@ export const login = async (username: string, password: string): Promise<TokenRe
 };
 
 export const logout = (): void => {
-  localStorage.removeItem('token');
+  localStorage.removeItem(AUTH_CONFIG.TOKEN_KEY);
+  localStorage.removeItem(AUTH_CONFIG.ROLE_KEY);
+  localStorage.removeItem(AUTH_CONFIG.USERNAME_KEY);
 };
 
 export const getUser = async (): Promise<User | null> => {
   try {
-    const response = await api.get<User>('/users/me');
-    return response.data;
+    return await apiService.getCurrentUser();
   } catch (error) {
     return null;
   }
@@ -49,7 +36,7 @@ interface JwtPayload {
 }
 
 export const isAuthenticated = (): boolean => {
-  const token = localStorage.getItem('token');
+  const token = localStorage.getItem(AUTH_CONFIG.TOKEN_KEY);
   
   // If no token exists, user is not authenticated
   if (!token) {
@@ -62,7 +49,7 @@ export const isAuthenticated = (): boolean => {
     const tokenParts = token.split('.');
     if (tokenParts.length !== 3) {
       // Not a valid JWT token
-      localStorage.removeItem('token');
+      localStorage.removeItem(AUTH_CONFIG.TOKEN_KEY);
       return false;
     }
     
@@ -80,7 +67,7 @@ export const isAuthenticated = (): boolean => {
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) {
       // Token has expired
-      localStorage.removeItem('token');
+      localStorage.removeItem(AUTH_CONFIG.TOKEN_KEY);
       return false;
     }
     
@@ -88,7 +75,7 @@ export const isAuthenticated = (): boolean => {
   } catch (e) {
     // If there's any error parsing the token, consider it invalid
     console.error('Error validating token:', e);
-    localStorage.removeItem('token');
+    localStorage.removeItem(AUTH_CONFIG.TOKEN_KEY);
     return false;
   }
 }; 

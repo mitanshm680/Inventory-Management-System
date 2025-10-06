@@ -1,34 +1,15 @@
-from typing import Dict, Any, Optional
+from typing import Optional
 from datetime import datetime
+from pydantic import BaseModel, Field
 
-
-class HistoryEntry:
-    """Represents an entry in the inventory history."""
-    
-    def __init__(self, 
-                 id: Optional[int], 
-                 action: str, 
-                 item_name: str, 
-                 quantity: Optional[int] = None, 
-                 group_name: Optional[str] = None,
-                 timestamp: Optional[datetime] = None):
-        """
-        Initialize a history entry.
-        
-        Args:
-            id: Database ID (optional)
-            action: The action performed (ADD, REMOVE, DELETE, etc.)
-            item_name: The name of the item affected
-            quantity: The quantity affected (if applicable)
-            group_name: The group name (if applicable)
-            timestamp: When the action occurred (defaults to now)
-        """
-        self.id = id
-        self.action = action
-        self.item_name = item_name
-        self.quantity = quantity
-        self.group_name = group_name
-        self.timestamp = timestamp or datetime.now()
+class HistoryEntry(BaseModel):
+    """Model for history entries."""
+    id: Optional[int] = None
+    action: str = Field(..., description="The action performed (ADD, REMOVE, DELETE, etc.)")
+    item_name: str = Field(..., description="The name of the item affected")
+    quantity: Optional[int] = Field(None, description="The quantity affected (if applicable)")
+    group_name: Optional[str] = Field(None, description="The group name (if applicable)")
+    timestamp: datetime = Field(default_factory=datetime.now, description="When the action occurred")
     
     @classmethod
     def from_db_row(cls, row):
@@ -43,17 +24,6 @@ class HistoryEntry:
             group_name=row['group_name'],
             timestamp=timestamp
         )
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert the history entry to a dictionary."""
-        return {
-            'id': self.id,
-            'action': self.action,
-            'item_name': self.item_name,
-            'quantity': self.quantity,
-            'group_name': self.group_name,
-            'timestamp': self.timestamp.isoformat()
-        }
     
     def __str__(self) -> str:
         """String representation of the history entry."""

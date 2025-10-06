@@ -31,34 +31,31 @@ class DBConnection:
             logging.info(f"Initialized database connection to {db_name}")
     
     def connect(self):
-        """Connect to the database with retry mechanism."""
+        """Connect to the database with optimized settings."""
         if self.conn is None:
-            max_retries = 3
-            retry_count = 0
-            
-            while retry_count < max_retries:
-                try:
-                    with self._lock:
-                        if self.conn is None:  # Double-check under lock
-                            self.conn = sqlite3.connect(
-                                self.db_name,
-                                check_same_thread=False,
-                                timeout=30.0  # Increase timeout for busy database
-                            )
-                            self.conn.row_factory = sqlite3.Row
-                            # Enable foreign key support
-                            self.conn.execute("PRAGMA foreign_keys = ON")
-                            # Set journal mode to WAL for better concurrency
-                            self.conn.execute("PRAGMA journal_mode = WAL")
-                            return self.conn
-                except sqlite3.Error as e:
-                    retry_count += 1
-                    if retry_count == max_retries:
-                        logging.error(f"Failed to connect to database after {max_retries} attempts: {e}")
-                        raise
-                    logging.warning(f"Database connection attempt {retry_count} failed: {e}")
-                    import time
-                    time.sleep(1)  # Wait before retrying
+            try:
+                with self._lock:
+                    if self.conn is None:  # Double-check under lock
+                        self.conn = sqlite3.connect(
+                            self.db_name,
+                            check_same_thread=False,
+                            timeout=10.0
+                        )
+                        self.conn.row_factory = sqlite3.Row
+
+                        # Performance optimizations
+                        self.conn.execute("PRAGMA journal_mode = WAL")
+                        self.conn.execute("PRAGMA synchronous = NORMAL")
+                        self.conn.execute("PRAGMA cache_size = 10000")
+                        self.conn.execute("PRAGMA temp_store = MEMORY")
+                        self.conn.execute("PRAGMA mmap_size = 30000000000")
+                        self.conn.execute("PRAGMA page_size = 4096")
+
+                        logging.info("Successfully connected to database")
+                        return self.conn
+            except sqlite3.Error as e:
+                logging.error(f"Failed to connect to database: {e}")
+                raise
         return self.conn
     
     def close(self):
@@ -77,20 +74,23 @@ class DBConnection:
     
     @contextmanager
     def get_cursor(self):
-        """Context manager to get a cursor and handle commits/rollbacks with proper locking."""
-        conn = self.connect()
+        """Context manager to get a cursor and handle commits/rollbacks."""
+        conn = None
         cursor = None
         try:
-            with self._lock:
-                cursor = conn.cursor()
+            conn = self.connect()
+            cursor = conn.cursor()
             yield cursor
-            with self._lock:
-                conn.commit()
-        except Exception as e:
-            with self._lock:
-                if conn.in_transaction:
-                    conn.rollback()
+            conn.commit()
+        except sqlite3.Error as e:
+            if conn:
+                conn.rollback()
             logging.error(f"Database error: {e}")
+            raise
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logging.error(f"Unexpected error: {e}")
             raise
         finally:
             if cursor:

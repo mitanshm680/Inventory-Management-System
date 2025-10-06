@@ -5,28 +5,24 @@ import os
 from datetime import datetime
 
 
-def setup_logging(log_level=logging.INFO):
-    """
-    Configure logging for the application.
-    
-    Args:
-        log_level: The logging level to use
-    """
+def setup_logging():
+    """Configure logging for the application."""
     # Create logs directory if it doesn't exist
     os.makedirs('logs', exist_ok=True)
     
-    # Get the current date and time for the log filename
-    log_filename = f"logs/inventory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    # Get current timestamp for log file name
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = f'logs/inventory_{timestamp}.log'
     
     # Configure logging
     logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(log_filename),
-            logging.StreamHandler()
+            logging.StreamHandler(),  # Log to console
+            logging.FileHandler(log_file)  # Log to file
         ]
     )
     
-    logging.info(f"Logging configured at level {logging.getLevelName(log_level)}")
-    logging.info(f"Writing logs to {log_filename}") 
+    logging.info("Logging configured at level INFO")
+    logging.info(f"Writing logs to {log_file}") 

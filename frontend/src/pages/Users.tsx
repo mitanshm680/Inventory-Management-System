@@ -40,7 +40,15 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import { useAuth } from '../contexts/AuthContext';
 import { User } from '../types';
-import api from '../utils/api';
+import { apiService } from '../services/api';
+
+interface UserFormData {
+  username: string;
+  password: string;
+  role: 'admin' | 'editor' | 'viewer';
+  name?: string;
+  email?: string;
+}
 
 const Users: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -56,7 +64,7 @@ const Users: React.FC = () => {
   const [deleteUsername, setDeleteUsername] = useState<string | null>(null);
 
   // Form states for add/edit
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<UserFormData>({
     username: '',
     password: '',
     role: 'viewer',
@@ -74,12 +82,13 @@ const Users: React.FC = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/users');
-      setUsers(response.data);
+      const response = await apiService.getUsers();
+      // API returns {users: [...]}
+      setUsers(response.users || []);
       setError(null);
     } catch (err) {
       console.error('Error fetching users:', err);
-      setError('Failed to load users. Please try again.');
+      setError('Failed to fetch users');
     } finally {
       setLoading(false);
     }
@@ -142,12 +151,12 @@ const Users: React.FC = () => {
     if (!deleteUsername) return;
     
     try {
-      await api.delete(`/users/${deleteUsername}`);
+      await apiService.deleteUser(deleteUsername);
       setSuccess(`User "${deleteUsername}" has been deleted`);
       fetchUsers(); // Refresh users
     } catch (err) {
       console.error('Error deleting user:', err);
-      setError('Failed to delete user. Please try again.');
+      setError('Failed to delete user');
     } finally {
       setIsDeleting(false);
       setDeleteUsername(null);
@@ -158,28 +167,30 @@ const Users: React.FC = () => {
     setOpenDialog(false);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (formData: UserFormData) => {
     try {
       if (currentEditUser) {
         // Update existing user
-        await api.put(`/users/${currentEditUser.username}`, {
+        await apiService.updateUser(currentEditUser.username, {
           role: formData.role
         });
         setSuccess(`User "${currentEditUser.username}" has been updated`);
       } else {
         // Add new user
-        await api.post('/users', {
+        await apiService.createUser({
           username: formData.username,
           password: formData.password,
           role: formData.role
         });
-        setSuccess(`User "${formData.username}" has been added`);
+        setSuccess(`User "${formData.username}" has been created`);
       }
-      setOpenDialog(false);
-      fetchUsers(); // Refresh users
+      fetchUsers(); // Refresh users list
     } catch (err) {
       console.error('Error saving user:', err);
-      setError('Failed to save user. Please check your input and try again.');
+      setError('Failed to save user');
+    } finally {
+      setOpenDialog(false);
+      setCurrentEditUser(null);
     }
   };
 
@@ -386,7 +397,7 @@ const Users: React.FC = () => {
           <Button onClick={handleDialogClose} color="inherit">
             Cancel
           </Button>
-          <Button onClick={handleSubmit} color="primary" variant="contained">
+          <Button onClick={() => handleSubmit(formData)} color="primary" variant="contained">
             {currentEditUser ? 'Update' : 'Add'}
           </Button>
         </DialogActions>

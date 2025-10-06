@@ -1,32 +1,116 @@
-#!/usr/bin/env python3
-import unittest
-import sqlite3
-import os
+"""Test database and SQL operations"""
 import sys
+import os
 
-# Add parent directory to path so we can import modules
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, parent_dir)
+# Force UTF-8 encoding for Windows console
+if os.name == 'nt':
+    import sys
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-# Connect to the database
-conn = sqlite3.connect('inventory.db')
-cursor = conn.cursor()
+from database.setup import initialize_database
+from services.inventory_service import InventoryService
+from services.user_service import UserService
 
-# Get a list of tables
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-tables = cursor.fetchall()
+def test_database():
+    print("="*60)
+    print("TESTING DATABASE OPERATIONS")
+    print("="*60)
 
-print("Tables in database:")
-for table in tables:
-    print(f"- {table[0]}")
+    # Initialize database
+    print("\n1. Initializing database...")
+    try:
+        initialize_database()
+        print("   [OK] Database initialized")
+    except Exception as e:
+        print(f"   [FAIL] Error: {e}")
+        return False
 
-# Check the structure of each table
-for table_name in [table[0] for table in tables]:
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    columns = cursor.fetchall()
-    print(f"\nStructure of {table_name} table:")
-    for col in columns:
-        print(f"  {col[1]} ({col[2]}){' PRIMARY KEY' if col[5] else ''}")
+    # Test user service
+    print("\n2. Testing user service...")
+    try:
+        user_service = UserService()
+        role = user_service.authenticate("admin", "1234")
+        if role == "admin":
+            print("   ✓ Admin login successful")
+        else:
+            print(f"   ✗ Login failed, got role: {role}")
+            return False
+    except Exception as e:
+        print(f"   ✗ Error: {e}")
+        return False
 
-# Close connection
-conn.close() 
+    # Test inventory service
+    print("\n3. Testing inventory service...")
+    try:
+        inv_service = InventoryService()
+
+        # Add item
+        print("   - Adding test item...")
+        success = inv_service.add_item("Test Item", 100, "Electronics", {"color": "blue"})
+        if success:
+            print("     ✓ Item added")
+        else:
+            print("     ✗ Failed to add item")
+            return False
+
+        # Get item
+        print("   - Retrieving item...")
+        item = inv_service.get_item("Test Item")
+        if item and item.quantity == 100:
+            print(f"     ✓ Item retrieved: {item.item_name}, qty: {item.quantity}")
+        else:
+            print("     ✗ Failed to retrieve item")
+            return False
+
+        # Update item
+        print("   - Removing 10 units...")
+        success = inv_service.remove_item("Test Item", 10)
+        if success:
+            updated_item = inv_service.get_item("Test Item")
+            if updated_item.quantity == 90:
+                print(f"     ✓ Quantity updated to {updated_item.quantity}")
+            else:
+                print(f"     ✗ Wrong quantity: {updated_item.quantity}")
+                return False
+        else:
+            print("     ✗ Failed to remove quantity")
+            return False
+
+        # Get all items
+        print("   - Getting all items...")
+        items = inv_service.get_inventory()
+        if len(items) == 1:
+            print(f"     ✓ Found {len(items)} item(s)")
+        else:
+            print(f"     ✗ Expected 1 item, found {len(items)}")
+            return False
+
+        # Delete item
+        print("   - Deleting item...")
+        success = inv_service.delete_item("Test Item")
+        if success:
+            items = inv_service.get_inventory()
+            if len(items) == 0:
+                print("     ✓ Item deleted")
+            else:
+                print(f"     ✗ Item still exists")
+                return False
+        else:
+            print("     ✗ Failed to delete item")
+            return False
+
+    except Exception as e:
+        print(f"   ✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    print("\n" + "="*60)
+    print("✓ ALL TESTS PASSED!")
+    print("="*60)
+    return True
+
+if __name__ == "__main__":
+    success = test_database()
+    sys.exit(0 if success else 1)
