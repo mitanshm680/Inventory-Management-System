@@ -90,7 +90,9 @@ const Locations: React.FC = () => {
     try {
       setLoading(true);
       const data = await apiService.getLocations(showActiveOnly);
-      setLocations(Array.isArray(data) ? data : []);
+      // Handle response format - API returns {locations: [...]}
+      const locationsList = data.locations || data;
+      setLocations(Array.isArray(locationsList) ? locationsList : []);
       setError(null);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch locations');

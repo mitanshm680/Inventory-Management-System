@@ -50,6 +50,23 @@ def get_future_date(days_ahead=180):
 def generate_sample_data():
     """Generate and insert sample data into the database"""
     try:
+        # First, delete old database files
+        import os
+        db_files = ['inventory.db', 'inventory.db-shm', 'inventory.db-wal']
+        for db_file in db_files:
+            if os.path.exists(db_file):
+                try:
+                    os.remove(db_file)
+                    print(f"Deleted old {db_file}")
+                except Exception as e:
+                    print(f"Warning: Could not delete {db_file}: {e}")
+
+        # Initialize the database schema
+        print("\nInitializing database schema...")
+        from database.setup import initialize_database
+        initialize_database()
+        print("Database schema initialized\n")
+
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
 
@@ -67,6 +84,8 @@ def generate_sample_data():
 
         # 2. Create suppliers
         print("\n[2/9] Creating suppliers...")
+        # First, delete existing suppliers to avoid conflicts
+        cursor.execute("DELETE FROM suppliers")
         supplier_ids = []
         for supplier in SUPPLIER_DATA:
             cursor.execute("""
@@ -81,6 +100,8 @@ def generate_sample_data():
 
         # 3. Create locations
         print("\n[3/9] Creating locations...")
+        # Delete existing locations
+        cursor.execute("DELETE FROM locations")
         location_ids = []
         for loc in LOCATIONS_DATA:
             name, address, city, state, zip_code, loc_type, capacity = loc
@@ -97,6 +118,8 @@ def generate_sample_data():
 
         # 4. Create items
         print("\n[4/9] Creating items...")
+        # Delete existing items
+        cursor.execute("DELETE FROM items")
         for item_name in ITEM_NAMES:
             group = random.choice(GROUPS)
             quantity = random.randint(10, 500)
@@ -111,6 +134,15 @@ def generate_sample_data():
 
         # 5. Create prices
         print("\n[5/9] Creating prices...")
+        # Delete existing data from related tables
+        cursor.execute("DELETE FROM prices")
+        cursor.execute("DELETE FROM price_history")
+        cursor.execute("DELETE FROM batches")
+        cursor.execute("DELETE FROM stock_adjustments")
+        cursor.execute("DELETE FROM alerts")
+        cursor.execute("DELETE FROM supplier_products")
+        cursor.execute("DELETE FROM supplier_locations")
+        cursor.execute("DELETE FROM history")
         price_count = 0
         for item_name in ITEM_NAMES:
             # Each item has 1-3 supplier prices
@@ -220,8 +252,69 @@ def generate_sample_data():
 
         print(f"   Created {alert_count} alerts")
 
-        # 10. Create activity history
-        print("\n[10/10] Creating activity history...")
+        # 10. Create supplier-product relationships (NEW)
+        print("\n[10/12] Creating supplier-product relationships...")
+        sp_count = 0
+        # Each item will have 1-3 suppliers offering it at different prices
+        for item_name in ITEM_NAMES:
+            num_suppliers = random.randint(1, 3)
+            selected_suppliers = random.sample(supplier_ids, num_suppliers)
+
+            for supplier_id in selected_suppliers:
+                base_price = random.uniform(50, 2000)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO supplier_products (
+                        supplier_id, item_name, supplier_sku, unit_price,
+                        minimum_order_quantity, lead_time_days, is_available, notes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                """, (
+                    supplier_id,
+                    item_name,
+                    f"SKU-{supplier_id}-{item_name[:5].upper()}",
+                    round(base_price, 2),
+                    random.choice([1, 5, 10, 25, 50]),
+                    random.randint(1, 14),
+                    f"Best price for orders over {random.choice([10, 50, 100])} units"
+                ))
+                sp_count += 1
+        print(f"   Created {sp_count} supplier-product relationships")
+
+        # 11. Create supplier-location relationships (NEW)
+        print("\n[11/12] Creating supplier-location relationships...")
+        sl_count = 0
+        # Each supplier can deliver to 2-4 locations with different costs
+        for supplier_id in supplier_ids:
+            num_locations = random.randint(2, len(location_ids))
+            selected_locations = random.sample(location_ids, num_locations)
+
+            for location_id in selected_locations:
+                distance = random.uniform(10, 800)
+                # Shipping cost increases with distance
+                shipping_cost = round(5 + (distance * 0.05), 2)
+                # Delivery days based on distance
+                delivery_days = 1 if distance < 100 else (2 if distance < 300 else random.randint(3, 7))
+
+                cursor.execute("""
+                    INSERT OR IGNORE INTO supplier_locations (
+                        supplier_id, location_id, distance_km, estimated_delivery_days,
+                        shipping_cost, is_preferred, notes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    supplier_id,
+                    location_id,
+                    round(distance, 1),
+                    delivery_days,
+                    shipping_cost,
+                    1 if distance < 150 else 0,  # Prefer closer suppliers
+                    f"Free shipping for orders over $500" if distance < 150 else None
+                ))
+                sl_count += 1
+        print(f"   Created {sl_count} supplier-location relationships")
+
+        # 12. Create activity history
+        print("\n[12/12] Creating activity history...")
         history_entries = 0
         actions = ['added', 'updated', 'deleted', 'quantity_changed']
         for _ in range(100):
@@ -247,6 +340,8 @@ def generate_sample_data():
         print(f"  - Suppliers: {len(SUPPLIER_DATA)}")
         print(f"  - Locations: {len(LOCATIONS_DATA)}")
         print(f"  - Items: {len(ITEM_NAMES)}")
+        print(f"  - Supplier-Products: {sp_count}")
+        print(f"  - Supplier-Locations: {sl_count}")
         print(f"  - Prices: {price_count}")
         print(f"  - Price History: {history_count}")
         print(f"  - Batches: {batch_count}")

@@ -296,6 +296,113 @@ def setup_database():
                 ON alerts(alert_type)
             """)
 
+            # Create notes/comments table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_name TEXT NOT NULL,
+                    note_text TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_pinned INTEGER DEFAULT 0,
+                    FOREIGN KEY (item_name) REFERENCES items(item_name) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_notes_item
+                ON notes(item_name, created_at DESC)
+            """)
+
+            # Create supplier_locations table (supplier proximity to locations)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supplier_locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    supplier_id INTEGER NOT NULL,
+                    location_id INTEGER NOT NULL,
+                    distance_km REAL,
+                    estimated_delivery_days INTEGER,
+                    shipping_cost REAL DEFAULT 0,
+                    is_preferred INTEGER DEFAULT 0,
+                    notes TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE,
+                    UNIQUE(supplier_id, location_id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supplier_locations_supplier
+                ON supplier_locations(supplier_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supplier_locations_location
+                ON supplier_locations(location_id)
+            """)
+
+            # Create supplier_products table (products each supplier can supply with their prices)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supplier_products (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    supplier_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
+                    supplier_sku TEXT,
+                    unit_price REAL NOT NULL CHECK(unit_price >= 0),
+                    minimum_order_quantity INTEGER DEFAULT 1,
+                    lead_time_days INTEGER,
+                    is_available INTEGER DEFAULT 1,
+                    last_price_update DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    notes TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (item_name) REFERENCES items(item_name) ON DELETE CASCADE,
+                    UNIQUE(supplier_id, item_name)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supplier_products_supplier
+                ON supplier_products(supplier_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supplier_products_item
+                ON supplier_products(item_name)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supplier_products_price
+                ON supplier_products(unit_price)
+            """)
+
+            # Add coordinates to locations for distance calculations
+            cursor.execute("""
+                SELECT COUNT(*) FROM pragma_table_info('locations')
+                WHERE name='latitude'
+            """)
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("ALTER TABLE locations ADD COLUMN latitude REAL")
+                cursor.execute("ALTER TABLE locations ADD COLUMN longitude REAL")
+                logging.info("Added latitude/longitude columns to locations table")
+
+            # Add coordinates to suppliers for distance calculations
+            cursor.execute("""
+                SELECT COUNT(*) FROM pragma_table_info('suppliers')
+                WHERE name='latitude'
+            """)
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("ALTER TABLE suppliers ADD COLUMN latitude REAL")
+                cursor.execute("ALTER TABLE suppliers ADD COLUMN longitude REAL")
+                cursor.execute("ALTER TABLE suppliers ADD COLUMN lead_time_days INTEGER DEFAULT 7")
+                cursor.execute("ALTER TABLE suppliers ADD COLUMN minimum_order_value REAL DEFAULT 0")
+                cursor.execute("ALTER TABLE suppliers ADD COLUMN payment_terms TEXT")
+                logging.info("Added coordinates and additional fields to suppliers table")
+
             logging.info("Database tables and indexes created successfully")
     except Exception as e:
         logging.error(f"Error setting up database: {e}")

@@ -1,20 +1,21 @@
-import React, { useState } from 'react';
-import { 
-  AppBar, 
-  Box, 
-  Toolbar, 
-  Typography, 
-  IconButton, 
-  Drawer, 
-  List, 
-  ListItem, 
-  ListItemIcon, 
-  ListItemText, 
+import React, { useState, useEffect } from 'react';
+import {
+  AppBar,
+  Box,
+  Toolbar,
+  Typography,
+  IconButton,
+  Drawer,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
   Divider,
   Avatar,
   Tooltip,
   useMediaQuery,
-  useTheme as useMuiTheme
+  useTheme as useMuiTheme,
+  Button
 } from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -32,9 +33,13 @@ import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import WarehouseIcon from '@mui/icons-material/Warehouse';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import HistoryIcon from '@mui/icons-material/History';
+import SearchIcon from '@mui/icons-material/Search';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import MapIcon from '@mui/icons-material/Map';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import AlertsPanel from './AlertsPanel';
+import GlobalSearch from './GlobalSearch';
 
 interface MenuItem {
   text: string;
@@ -51,6 +56,21 @@ const NavBar: React.FC = () => {
   const muiTheme = useMuiTheme();
   const isMobile = useMediaQuery(muiTheme.breakpoints.down('md'));
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+K or Cmd+K to open search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const handleDrawerToggle = () => {
     setDrawerOpen(!drawerOpen);
@@ -71,6 +91,8 @@ const NavBar: React.FC = () => {
     { text: 'Groups', icon: <CategoryIcon />, path: '/groups', requiredRole: 'editor' },
     { text: 'Suppliers', icon: <LocalShippingIcon />, path: '/suppliers', requiredRole: 'viewer' },
     { text: 'Locations', icon: <WarehouseIcon />, path: '/locations', requiredRole: 'editor' },
+    { text: 'Supplier Products', icon: <CompareArrowsIcon />, path: '/supplier-products', requiredRole: 'viewer' },
+    { text: 'Supplier Locations', icon: <MapIcon />, path: '/supplier-locations', requiredRole: 'viewer' },
     { text: 'Batches', icon: <QrCodeIcon />, path: '/batches', requiredRole: 'viewer' },
     { text: 'Stock Adjustments', icon: <HistoryIcon />, path: '/stock-adjustments', requiredRole: 'editor' },
     { text: 'Price Management', icon: <PriceChangeIcon />, path: '/prices', requiredRole: 'viewer' },
@@ -167,7 +189,52 @@ const NavBar: React.FC = () => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Inventory Management System
           </Typography>
-          
+
+          {/* Search Button */}
+          {!isMobile && (
+            <Button
+              variant="outlined"
+              startIcon={<SearchIcon />}
+              onClick={() => setSearchOpen(true)}
+              sx={{
+                mr: 2,
+                color: 'inherit',
+                borderColor: 'rgba(255, 255, 255, 0.3)',
+                textTransform: 'none',
+                minWidth: 200,
+                justifyContent: 'space-between',
+                '&:hover': {
+                  borderColor: 'rgba(255, 255, 255, 0.5)',
+                  bgcolor: 'rgba(255, 255, 255, 0.1)',
+                }
+              }}
+              endIcon={
+                <Box
+                  component="kbd"
+                  sx={{
+                    bgcolor: 'rgba(255, 255, 255, 0.2)',
+                    px: 0.5,
+                    py: 0.25,
+                    borderRadius: 0.5,
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  Ctrl+K
+                </Box>
+              }
+            >
+              Search...
+            </Button>
+          )}
+
+          {isMobile && (
+            <Tooltip title="Search">
+              <IconButton color="inherit" onClick={() => setSearchOpen(true)}>
+                <SearchIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+
           {!isMobile && (
             <>
               <AlertsPanel />
@@ -192,6 +259,7 @@ const NavBar: React.FC = () => {
       >
         {drawer}
       </Drawer>
+      <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
     </>
   );
 };

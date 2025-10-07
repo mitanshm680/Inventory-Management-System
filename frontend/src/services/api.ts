@@ -375,6 +375,64 @@ export class ApiService {
         const response = await this.api.get(endpoint, { params });
         return response.data;
     }
+
+    // Supplier Products
+    async getSupplierProducts(supplierId: number): Promise<any> {
+        const response = await this.api.get(`/supplier-products/${supplierId}`);
+        return response.data;
+    }
+
+    async getItemSuppliers(itemName: string): Promise<any> {
+        const response = await this.api.get(`/item-suppliers/${encodeURIComponent(itemName)}`);
+        return response.data;
+    }
+
+    async createSupplierProduct(data: any): Promise<any> {
+        const response = await this.api.post('/supplier-products', data);
+        return response.data;
+    }
+
+    async updateSupplierProduct(id: number, data: any): Promise<any> {
+        const response = await this.api.put(`/supplier-products/${id}`, data);
+        return response.data;
+    }
+
+    async deleteSupplierProduct(id: number): Promise<any> {
+        const response = await this.api.delete(`/supplier-products/${id}`);
+        return response.data;
+    }
+
+    async getBestPrice(itemName: string, locationId?: number): Promise<any> {
+        const params = locationId ? { location_id: locationId } : {};
+        const response = await this.api.get(`/best-price/${encodeURIComponent(itemName)}`, { params });
+        return response.data;
+    }
+
+    // Supplier Locations
+    async getSupplierLocations(supplierId: number): Promise<any> {
+        const response = await this.api.get(`/supplier-locations/${supplierId}`);
+        return response.data;
+    }
+
+    async getLocationSuppliers(locationId: number): Promise<any> {
+        const response = await this.api.get(`/location-suppliers/${locationId}`);
+        return response.data;
+    }
+
+    async createSupplierLocation(data: any): Promise<any> {
+        const response = await this.api.post('/supplier-locations', data);
+        return response.data;
+    }
+
+    async updateSupplierLocation(id: number, data: any): Promise<any> {
+        const response = await this.api.put(`/supplier-locations/${id}`, data);
+        return response.data;
+    }
+
+    async deleteSupplierLocation(id: number): Promise<any> {
+        const response = await this.api.delete(`/supplier-locations/${id}`);
+        return response.data;
+    }
 }
 
 export const apiService = new ApiService(); 

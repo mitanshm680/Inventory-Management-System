@@ -2,7 +2,7 @@
 Inventory Management System - Backend API
 Complete FastAPI backend with all endpoints
 """
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
@@ -16,6 +16,8 @@ import logging
 import sqlite3
 import sys
 import os
+import csv
+import io
 
 # Import our services
 from services.inventory_service import InventoryService
@@ -270,6 +272,12 @@ def get_editor_user(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Editor or admin access required")
     return current_user
 
+def get_admin_or_editor(current_user: User = Depends(get_current_user)):
+    """Alias for get_editor_user for clarity"""
+    if current_user.role not in ["admin", "editor"]:
+        raise HTTPException(status_code=403, detail="Editor or admin access required")
+    return current_user
+
 # ============================================================================
 # Authentication Endpoints
 # ============================================================================
@@ -389,6 +397,39 @@ async def get_item(item_name: str, current_user: User = Depends(get_current_user
         "custom_fields": item.custom_fields or {}
     }
 
+@app.get("/inventory/check-duplicate/{item_name}")
+async def check_duplicate_item(item_name: str, current_user: User = Depends(get_current_user)):
+    """Check for similar/duplicate items"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Check exact match
+            cursor.execute("SELECT 1 FROM items WHERE item_name = ?", (item_name,))
+            exact_match = cursor.fetchone()
+
+            # Check similar names (fuzzy match)
+            similar_items = []
+            cursor.execute("SELECT item_name FROM items")
+            all_items = cursor.fetchall()
+
+            item_lower = item_name.lower()
+            for row in all_items:
+                existing_name = row['item_name']
+                existing_lower = existing_name.lower()
+
+                # Check various similarity conditions
+                if (item_lower in existing_lower or existing_lower in item_lower or
+                    item_lower.replace(' ', '') == existing_lower.replace(' ', '') or
+                    item_lower.replace('-', '') == existing_lower.replace('-', '')):
+                    similar_items.append(existing_name)
+
+            return {
+                "exists": exact_match is not None,
+                "similar_items": similar_items[:5]  # Limit to 5 suggestions
+            }
+    except Exception as e:
+        logging.error(f"Error checking duplicates: {e}")
+        raise HTTPException(status_code=500, detail="Error checking for duplicates")
+
 @app.post("/inventory")
 async def add_inventory_item(item: InventoryItem, current_user: User = Depends(get_editor_user)):
     """Add new inventory item"""
@@ -444,6 +485,103 @@ async def delete_inventory_item(item_name: str, current_user: User = Depends(get
     if success:
         return {"message": f"Item '{item_name}' deleted successfully"}
     raise HTTPException(status_code=404, detail="Item not found")
+
+class BulkDeleteRequest(BaseModel):
+    item_names: List[str]
+
+class BulkUpdateRequest(BaseModel):
+    item_names: List[str]
+    quantity: Optional[int] = None
+    group_name: Optional[str] = None
+    reorder_level: Optional[int] = None
+    reorder_quantity: Optional[int] = None
+
+@app.post("/inventory/bulk-delete")
+async def bulk_delete_items(request: BulkDeleteRequest, current_user: User = Depends(get_admin_user)):
+    """Bulk delete multiple items"""
+    try:
+        deleted = []
+        failed = []
+
+        for item_name in request.item_names:
+            success = inventory_service.delete_item(item_name)
+            if success:
+                deleted.append(item_name)
+            else:
+                failed.append(item_name)
+
+        return {
+            "message": f"Deleted {len(deleted)} items",
+            "deleted": deleted,
+            "failed": failed
+        }
+    except Exception as e:
+        logging.error(f"Error in bulk delete: {e}")
+        raise HTTPException(status_code=500, detail="Error performing bulk delete")
+
+@app.post("/inventory/bulk-update")
+async def bulk_update_items(request: BulkUpdateRequest, current_user: User = Depends(get_admin_or_editor)):
+    """Bulk update multiple items"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            updated = []
+            failed = []
+
+            for item_name in request.item_names:
+                try:
+                    # Check if item exists
+                    cursor.execute("SELECT 1 FROM items WHERE item_name = ?", (item_name,))
+                    if not cursor.fetchone():
+                        failed.append({"item": item_name, "reason": "not found"})
+                        continue
+
+                    # Build update query dynamically
+                    updates = []
+                    params = []
+
+                    if request.quantity is not None:
+                        updates.append("quantity = ?")
+                        params.append(request.quantity)
+
+                    if request.group_name is not None:
+                        updates.append("group_name = ?")
+                        params.append(request.group_name)
+
+                    if request.reorder_level is not None:
+                        updates.append("reorder_level = ?")
+                        params.append(request.reorder_level)
+
+                    if request.reorder_quantity is not None:
+                        updates.append("reorder_quantity = ?")
+                        params.append(request.reorder_quantity)
+
+                    if updates:
+                        params.append(item_name)
+                        cursor.execute(f"""
+                            UPDATE items
+                            SET {', '.join(updates)}
+                            WHERE item_name = ?
+                        """, params)
+
+                        # Add to history
+                        cursor.execute("""
+                            INSERT INTO history (action, item_name, user_name)
+                            VALUES (?, ?, ?)
+                        """, ("bulk_updated", item_name, current_user.username))
+
+                        updated.append(item_name)
+
+                except Exception as e:
+                    failed.append({"item": item_name, "reason": str(e)})
+
+            return {
+                "message": f"Updated {len(updated)} items",
+                "updated": updated,
+                "failed": failed
+            }
+    except Exception as e:
+        logging.error(f"Error in bulk update: {e}")
+        raise HTTPException(status_code=500, detail="Error performing bulk update")
 
 @app.get("/inventory/{item_name}/history")
 async def get_item_history(item_name: str, current_user: User = Depends(get_current_user)):
@@ -1073,6 +1211,323 @@ async def search_suppliers(name: str, current_user: User = Depends(get_current_u
     except Exception as e:
         logging.error(f"Error searching suppliers: {e}")
         raise HTTPException(status_code=500, detail="Error searching suppliers")
+
+# ============================================================================
+# SUPPLIER-PRODUCT RELATIONSHIPS
+# ============================================================================
+
+class SupplierProduct(BaseModel):
+    supplier_id: int
+    item_name: str
+    supplier_sku: Optional[str] = None
+    unit_price: float
+    minimum_order_quantity: Optional[int] = 1
+    lead_time_days: Optional[int] = None
+    is_available: Optional[bool] = True
+    notes: Optional[str] = None
+
+@app.get("/supplier-products/{supplier_id}")
+async def get_supplier_products(supplier_id: int, current_user: User = Depends(get_current_user)):
+    """Get all products offered by a supplier with prices"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT sp.*, i.quantity as current_stock, i.group_name
+                FROM supplier_products sp
+                LEFT JOIN items i ON sp.item_name = i.item_name
+                WHERE sp.supplier_id = ?
+                ORDER BY sp.item_name
+            """, (supplier_id,))
+
+            products = []
+            for row in cursor.fetchall():
+                products.append({
+                    "id": row['id'],
+                    "item_name": row['item_name'],
+                    "supplier_sku": row['supplier_sku'],
+                    "unit_price": row['unit_price'],
+                    "minimum_order_quantity": row['minimum_order_quantity'],
+                    "lead_time_days": row['lead_time_days'],
+                    "is_available": bool(row['is_available']),
+                    "current_stock": row['current_stock'],
+                    "group_name": row['group_name'],
+                    "last_price_update": row['last_price_update'],
+                    "notes": row['notes']
+                })
+            return products
+    except Exception as e:
+        logging.error(f"Error fetching supplier products: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching supplier products")
+
+@app.get("/item-suppliers/{item_name}")
+async def get_item_suppliers(item_name: str, current_user: User = Depends(get_current_user)):
+    """Get all suppliers for a specific item with their prices"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT sp.*, s.name as supplier_name, s.rating, s.lead_time_days as supplier_lead_time,
+                       s.email, s.phone, s.is_active as supplier_active
+                FROM supplier_products sp
+                JOIN suppliers s ON sp.supplier_id = s.id
+                WHERE sp.item_name = ?
+                ORDER BY sp.unit_price ASC
+            """, (item_name,))
+
+            suppliers = []
+            for row in cursor.fetchall():
+                suppliers.append({
+                    "id": row['id'],
+                    "supplier_id": row['supplier_id'],
+                    "supplier_name": row['supplier_name'],
+                    "supplier_sku": row['supplier_sku'],
+                    "unit_price": row['unit_price'],
+                    "minimum_order_quantity": row['minimum_order_quantity'],
+                    "lead_time_days": row['lead_time_days'] or row['supplier_lead_time'],
+                    "is_available": bool(row['is_available']),
+                    "rating": row['rating'],
+                    "email": row['email'],
+                    "phone": row['phone'],
+                    "supplier_active": bool(row['supplier_active']),
+                    "last_price_update": row['last_price_update'],
+                    "notes": row['notes']
+                })
+            return suppliers
+    except Exception as e:
+        logging.error(f"Error fetching item suppliers: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching item suppliers")
+
+@app.post("/supplier-products")
+async def create_supplier_product(product: SupplierProduct, current_user: User = Depends(get_admin_or_editor)):
+    """Add a product to a supplier's catalog"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO supplier_products
+                (supplier_id, item_name, supplier_sku, unit_price, minimum_order_quantity,
+                 lead_time_days, is_available, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (product.supplier_id, product.item_name, product.supplier_sku, product.unit_price,
+                  product.minimum_order_quantity, product.lead_time_days,
+                  1 if product.is_available else 0, product.notes))
+
+            return {"message": "Supplier product added successfully", "id": cursor.lastrowid}
+    except Exception as e:
+        logging.error(f"Error creating supplier product: {e}")
+        raise HTTPException(status_code=500, detail="Error creating supplier product")
+
+@app.put("/supplier-products/{id}")
+async def update_supplier_product(id: int, product: SupplierProduct, current_user: User = Depends(get_admin_or_editor)):
+    """Update supplier product information"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE supplier_products
+                SET supplier_sku = ?, unit_price = ?, minimum_order_quantity = ?,
+                    lead_time_days = ?, is_available = ?, notes = ?,
+                    last_price_update = datetime('now'), updated_at = datetime('now')
+                WHERE id = ?
+            """, (product.supplier_sku, product.unit_price, product.minimum_order_quantity,
+                  product.lead_time_days, 1 if product.is_available else 0, product.notes, id))
+
+            return {"message": "Supplier product updated successfully"}
+    except Exception as e:
+        logging.error(f"Error updating supplier product: {e}")
+        raise HTTPException(status_code=500, detail="Error updating supplier product")
+
+@app.delete("/supplier-products/{id}")
+async def delete_supplier_product(id: int, current_user: User = Depends(get_admin_user)):
+    """Remove a product from supplier's catalog"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("DELETE FROM supplier_products WHERE id = ?", (id,))
+            return {"message": "Supplier product deleted successfully"}
+    except Exception as e:
+        logging.error(f"Error deleting supplier product: {e}")
+        raise HTTPException(status_code=500, detail="Error deleting supplier product")
+
+@app.get("/best-price/{item_name}")
+async def get_best_price(item_name: str, location_id: Optional[int] = None, current_user: User = Depends(get_current_user)):
+    """Find best price for an item, optionally considering location proximity"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            if location_id:
+                # Consider shipping costs from supplier location
+                cursor.execute("""
+                    SELECT sp.*, s.name as supplier_name, s.rating,
+                           sl.shipping_cost, sl.distance_km, sl.estimated_delivery_days
+                    FROM supplier_products sp
+                    JOIN suppliers s ON sp.supplier_id = s.id
+                    LEFT JOIN supplier_locations sl ON s.id = sl.supplier_id AND sl.location_id = ?
+                    WHERE sp.item_name = ? AND sp.is_available = 1 AND s.is_active = 1
+                    ORDER BY (sp.unit_price + COALESCE(sl.shipping_cost, 0)) ASC
+                    LIMIT 1
+                """, (location_id, item_name))
+            else:
+                cursor.execute("""
+                    SELECT sp.*, s.name as supplier_name, s.rating
+                    FROM supplier_products sp
+                    JOIN suppliers s ON sp.supplier_id = s.id
+                    WHERE sp.item_name = ? AND sp.is_available = 1 AND s.is_active = 1
+                    ORDER BY sp.unit_price ASC
+                    LIMIT 1
+                """, (item_name,))
+
+            result = cursor.fetchone()
+            if not result:
+                raise HTTPException(status_code=404, detail="No suppliers found for this item")
+
+            response = {
+                "item_name": item_name,
+                "supplier_id": result['supplier_id'],
+                "supplier_name": result['supplier_name'],
+                "unit_price": result['unit_price'],
+                "rating": result['rating'],
+                "lead_time_days": result['lead_time_days'],
+                "minimum_order_quantity": result['minimum_order_quantity']
+            }
+
+            if location_id and result.get('shipping_cost') is not None:
+                response.update({
+                    "shipping_cost": result['shipping_cost'],
+                    "total_cost": result['unit_price'] + result['shipping_cost'],
+                    "distance_km": result['distance_km'],
+                    "estimated_delivery_days": result['estimated_delivery_days']
+                })
+
+            return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error finding best price: {e}")
+        raise HTTPException(status_code=500, detail="Error finding best price")
+
+# ============================================================================
+# SUPPLIER-LOCATION RELATIONSHIPS
+# ============================================================================
+
+class SupplierLocation(BaseModel):
+    supplier_id: int
+    location_id: int
+    distance_km: Optional[float] = None
+    estimated_delivery_days: Optional[int] = None
+    shipping_cost: Optional[float] = 0
+    is_preferred: Optional[bool] = False
+    notes: Optional[str] = None
+
+@app.get("/supplier-locations/{supplier_id}")
+async def get_supplier_locations(supplier_id: int, current_user: User = Depends(get_current_user)):
+    """Get all locations a supplier can deliver to"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT sl.*, l.name as location_name, l.city, l.state, l.location_type
+                FROM supplier_locations sl
+                JOIN locations l ON sl.location_id = l.id
+                WHERE sl.supplier_id = ?
+                ORDER BY sl.distance_km ASC
+            """, (supplier_id,))
+
+            locations = []
+            for row in cursor.fetchall():
+                locations.append({
+                    "id": row['id'],
+                    "location_id": row['location_id'],
+                    "location_name": row['location_name'],
+                    "city": row['city'],
+                    "state": row['state'],
+                    "location_type": row['location_type'],
+                    "distance_km": row['distance_km'],
+                    "estimated_delivery_days": row['estimated_delivery_days'],
+                    "shipping_cost": row['shipping_cost'],
+                    "is_preferred": bool(row['is_preferred']),
+                    "notes": row['notes']
+                })
+            return locations
+    except Exception as e:
+        logging.error(f"Error fetching supplier locations: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching supplier locations")
+
+@app.get("/location-suppliers/{location_id}")
+async def get_location_suppliers(location_id: int, current_user: User = Depends(get_current_user)):
+    """Get all suppliers that deliver to a location"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT sl.*, s.name as supplier_name, s.rating, s.email, s.phone,
+                       s.is_active, s.payment_terms
+                FROM supplier_locations sl
+                JOIN suppliers s ON sl.supplier_id = s.id
+                WHERE sl.location_id = ?
+                ORDER BY sl.distance_km ASC, s.rating DESC
+            """, (location_id,))
+
+            suppliers = []
+            for row in cursor.fetchall():
+                suppliers.append({
+                    "id": row['id'],
+                    "supplier_id": row['supplier_id'],
+                    "supplier_name": row['supplier_name'],
+                    "rating": row['rating'],
+                    "email": row['email'],
+                    "phone": row['phone'],
+                    "is_active": bool(row['is_active']),
+                    "distance_km": row['distance_km'],
+                    "estimated_delivery_days": row['estimated_delivery_days'],
+                    "shipping_cost": row['shipping_cost'],
+                    "is_preferred": bool(row['is_preferred']),
+                    "payment_terms": row['payment_terms'],
+                    "notes": row['notes']
+                })
+            return suppliers
+    except Exception as e:
+        logging.error(f"Error fetching location suppliers: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching location suppliers")
+
+@app.post("/supplier-locations")
+async def create_supplier_location(sl: SupplierLocation, current_user: User = Depends(get_admin_or_editor)):
+    """Link a supplier to a location with delivery details"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO supplier_locations
+                (supplier_id, location_id, distance_km, estimated_delivery_days, shipping_cost, is_preferred, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (sl.supplier_id, sl.location_id, sl.distance_km, sl.estimated_delivery_days,
+                  sl.shipping_cost, 1 if sl.is_preferred else 0, sl.notes))
+
+            return {"message": "Supplier-location relationship created successfully", "id": cursor.lastrowid}
+    except Exception as e:
+        logging.error(f"Error creating supplier-location: {e}")
+        raise HTTPException(status_code=500, detail="Error creating supplier-location relationship")
+
+@app.put("/supplier-locations/{id}")
+async def update_supplier_location(id: int, sl: SupplierLocation, current_user: User = Depends(get_admin_or_editor)):
+    """Update supplier-location relationship"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE supplier_locations
+                SET distance_km = ?, estimated_delivery_days = ?, shipping_cost = ?,
+                    is_preferred = ?, notes = ?, updated_at = datetime('now')
+                WHERE id = ?
+            """, (sl.distance_km, sl.estimated_delivery_days, sl.shipping_cost,
+                  1 if sl.is_preferred else 0, sl.notes, id))
+
+            return {"message": "Supplier-location updated successfully"}
+    except Exception as e:
+        logging.error(f"Error updating supplier-location: {e}")
+        raise HTTPException(status_code=500, detail="Error updating supplier-location")
+
+@app.delete("/supplier-locations/{id}")
+async def delete_supplier_location(id: int, current_user: User = Depends(get_admin_user)):
+    """Remove supplier-location relationship"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("DELETE FROM supplier_locations WHERE id = ?", (id,))
+            return {"message": "Supplier-location deleted successfully"}
+    except Exception as e:
+        logging.error(f"Error deleting supplier-location: {e}")
+        raise HTTPException(status_code=500, detail="Error deleting supplier-location")
 
 # ============================================================================
 # LOCATIONS MANAGEMENT ENDPOINTS
@@ -1883,6 +2338,80 @@ async def create_backup(current_user: User = Depends(get_admin_user)):
         logging.error(f"Error creating backup: {e}")
         raise HTTPException(status_code=500, detail="Error creating backup")
 
+@app.post("/import/csv")
+async def import_inventory_csv(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Import inventory items from CSV file"""
+    try:
+        # Read file content
+        content = await file.read()
+        decoded_content = content.decode('utf-8')
+        csv_reader = csv.DictReader(io.StringIO(decoded_content))
+
+        imported = []
+        updated = []
+        failed = []
+
+        with db_connection.get_cursor() as cursor:
+            for row in csv_reader:
+                try:
+                    item_name = row.get('name') or row.get('item_name')
+                    if not item_name:
+                        failed.append({"row": row, "reason": "Missing item name"})
+                        continue
+
+                    quantity = int(row.get('quantity', 0))
+                    group_name = row.get('group') or row.get('group_name')
+                    reorder_level = int(row.get('reorder_level', 10)) if row.get('reorder_level') else 10
+                    reorder_quantity = int(row.get('reorder_quantity', 50)) if row.get('reorder_quantity') else 50
+
+                    # Check if item exists
+                    cursor.execute("SELECT 1 FROM items WHERE item_name = ?", (item_name,))
+                    exists = cursor.fetchone()
+
+                    if exists:
+                        # Update existing item
+                        cursor.execute("""
+                            UPDATE items
+                            SET quantity = ?, group_name = ?, reorder_level = ?, reorder_quantity = ?
+                            WHERE item_name = ?
+                        """, (quantity, group_name, reorder_level, reorder_quantity, item_name))
+                        updated.append(item_name)
+                    else:
+                        # Create group if it doesn't exist
+                        if group_name:
+                            cursor.execute("""
+                                INSERT OR IGNORE INTO groups (group_name) VALUES (?)
+                            """, (group_name,))
+
+                        # Insert new item
+                        cursor.execute("""
+                            INSERT INTO items (item_name, quantity, group_name, reorder_level, reorder_quantity)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (item_name, quantity, group_name, reorder_level, reorder_quantity))
+                        imported.append(item_name)
+
+                    # Add to history
+                    cursor.execute("""
+                        INSERT INTO history (action, item_name, quantity, group_name, user_name)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, ("csv_import", item_name, quantity, group_name, current_user.username))
+
+                except Exception as e:
+                    failed.append({"row": row, "reason": str(e)})
+
+        return {
+            "message": f"Import complete: {len(imported)} new, {len(updated)} updated",
+            "imported": imported,
+            "updated": updated,
+            "failed": failed
+        }
+    except Exception as e:
+        logging.error(f"Error importing CSV: {e}")
+        raise HTTPException(status_code=500, detail=f"Error importing CSV: {str(e)}")
+
 @app.get("/export/csv")
 async def export_inventory_csv(
     groups: Optional[str] = None,
@@ -1905,6 +2434,140 @@ async def export_inventory_csv(
     except Exception as e:
         logging.error(f"Error exporting CSV: {e}")
         raise HTTPException(status_code=500, detail="Error exporting data")
+
+# ============================================================================
+# NOTES/COMMENTS ENDPOINTS
+# ============================================================================
+
+class NoteCreate(BaseModel):
+    item_name: str
+    note_text: str
+    is_pinned: Optional[bool] = False
+
+class NoteUpdate(BaseModel):
+    note_text: Optional[str] = None
+    is_pinned: Optional[bool] = None
+
+@app.get("/notes/{item_name}")
+async def get_item_notes(item_name: str, current_user: User = Depends(get_current_user)):
+    """Get all notes for a specific item"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, item_name, note_text, created_by, created_at, updated_at, is_pinned
+                FROM notes
+                WHERE item_name = ?
+                ORDER BY is_pinned DESC, created_at DESC
+            """, (item_name,))
+            notes = cursor.fetchall()
+            return notes
+    except Exception as e:
+        logging.error(f"Error getting notes: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving notes")
+
+@app.post("/notes")
+async def create_note(note: NoteCreate, current_user: User = Depends(get_current_user)):
+    """Create a new note for an item"""
+    if current_user.role == 'viewer':
+        raise HTTPException(status_code=403, detail="Viewers cannot create notes")
+
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Check if item exists
+            cursor.execute("SELECT 1 FROM items WHERE item_name = ?", (note.item_name,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Item not found")
+
+            cursor.execute("""
+                INSERT INTO notes (item_name, note_text, created_by, is_pinned)
+                VALUES (?, ?, ?, ?)
+            """, (note.item_name, note.note_text, current_user.username, 1 if note.is_pinned else 0))
+
+            note_id = cursor.lastrowid
+
+            # Add to history
+            cursor.execute("""
+                INSERT INTO history (action, item_name, user_name)
+                VALUES (?, ?, ?)
+            """, ("note_added", note.item_name, current_user.username))
+
+            return {"id": note_id, "message": "Note created successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating note: {e}")
+        raise HTTPException(status_code=500, detail="Error creating note")
+
+@app.put("/notes/{note_id}")
+async def update_note(note_id: int, note: NoteUpdate, current_user: User = Depends(get_current_user)):
+    """Update an existing note"""
+    if current_user.role == 'viewer':
+        raise HTTPException(status_code=403, detail="Viewers cannot update notes")
+
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Check if note exists and get creator
+            cursor.execute("SELECT created_by, item_name FROM notes WHERE id = ?", (note_id,))
+            existing = cursor.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Note not found")
+
+            # Only admin or creator can edit
+            if current_user.role != 'admin' and existing['created_by'] != current_user.username:
+                raise HTTPException(status_code=403, detail="Cannot edit others' notes")
+
+            updates = []
+            params = []
+            if note.note_text is not None:
+                updates.append("note_text = ?")
+                params.append(note.note_text)
+            if note.is_pinned is not None:
+                updates.append("is_pinned = ?")
+                params.append(1 if note.is_pinned else 0)
+
+            if updates:
+                updates.append("updated_at = datetime('now')")
+                params.append(note_id)
+
+                cursor.execute(f"""
+                    UPDATE notes
+                    SET {', '.join(updates)}
+                    WHERE id = ?
+                """, params)
+
+                return {"message": "Note updated successfully"}
+            return {"message": "No changes made"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating note: {e}")
+        raise HTTPException(status_code=500, detail="Error updating note")
+
+@app.delete("/notes/{note_id}")
+async def delete_note(note_id: int, current_user: User = Depends(get_current_user)):
+    """Delete a note"""
+    if current_user.role == 'viewer':
+        raise HTTPException(status_code=403, detail="Viewers cannot delete notes")
+
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Check if note exists and get creator
+            cursor.execute("SELECT created_by FROM notes WHERE id = ?", (note_id,))
+            existing = cursor.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Note not found")
+
+            # Only admin or creator can delete
+            if current_user.role != 'admin' and existing['created_by'] != current_user.username:
+                raise HTTPException(status_code=403, detail="Cannot delete others' notes")
+
+            cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+            return {"message": "Note deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting note: {e}")
+        raise HTTPException(status_code=500, detail="Error deleting note")
 
 # ============================================================================
 # Health Check

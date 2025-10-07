@@ -84,7 +84,9 @@ const Suppliers: React.FC = () => {
     try {
       setLoading(true);
       const data = await apiService.getSuppliers(showActiveOnly);
-      setSuppliers(Array.isArray(data) ? data : []);
+      // Handle response format - API returns {suppliers: [...]}
+      const suppliersList = data.suppliers || data;
+      setSuppliers(Array.isArray(suppliersList) ? suppliersList : []);
       setError(null);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch suppliers');
