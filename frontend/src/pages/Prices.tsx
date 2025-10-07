@@ -284,13 +284,68 @@ const Prices: React.FC = () => {
     }).format(price);
   };
 
+  // Calculate summary statistics
+  const totalItems = flattenedPrices.length;
+  const itemsWithMultipleSuppliers = flattenedPrices.filter(item => item.entries.length > 1).length;
+  const totalPriceEntries = flattenedPrices.reduce((sum, item) => sum + item.entries.length, 0);
+  const uniqueSuppliers = new Set(flattenedPrices.flatMap(item => item.entries.map(e => e.supplier))).size;
+
   return (
     <Container>
       <Box sx={{ mt: 4 }}>
         <Typography variant="h4" gutterBottom>
           Price Management
         </Typography>
-        
+
+        {/* Summary Statistics */}
+        {!loading && flattenedPrices.length > 0 && (
+          <Grid container spacing={2} sx={{ mb: 3 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Typography color="text.secondary" gutterBottom variant="body2">
+                    Total Items
+                  </Typography>
+                  <Typography variant="h4">{totalItems}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Typography color="text.secondary" gutterBottom variant="body2">
+                    Unique Suppliers
+                  </Typography>
+                  <Typography variant="h4">{uniqueSuppliers}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Typography color="text.secondary" gutterBottom variant="body2">
+                    Price Entries
+                  </Typography>
+                  <Typography variant="h4">{totalPriceEntries}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card elevation={2} sx={{ bgcolor: 'success.light' }}>
+                <CardContent>
+                  <Typography color="text.secondary" gutterBottom variant="body2">
+                    Multi-Supplier Items
+                  </Typography>
+                  <Typography variant="h4">{itemsWithMultipleSuppliers}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Can compare prices
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        )}
+
         {/* Search and Add button */}
         <Paper sx={{ p: 2, mb: 3, display: 'flex', alignItems: 'center' }}>
           <Grid container spacing={2} alignItems="center">
@@ -382,6 +437,7 @@ const Prices: React.FC = () => {
                             <TableRow>
                               <TableCell>Supplier</TableCell>
                               <TableCell align="right">Price</TableCell>
+                              <TableCell align="right">Difference</TableCell>
                               <TableCell>Price Type</TableCell>
                               <TableCell>Last Updated</TableCell>
                               {canEdit && <TableCell align="center">Actions</TableCell>}
@@ -389,43 +445,83 @@ const Prices: React.FC = () => {
                           </TableHead>
                           <TableBody>
                             {item.entries.length > 0 ? (
-                              item.entries.map((entry) => (
-                                <TableRow key={`${item.item_name}-${entry.supplier}`}>
-                                  <TableCell>{entry.supplier}</TableCell>
-                                  <TableCell align="right">
-                                    {formatPrice(entry.price)}
-                                    {item.cheapest?.supplier === entry.supplier && (
-                                      <Chip 
-                                        label="Best Price" 
-                                        color="success" 
-                                        size="small" 
-                                        sx={{ ml: 1 }} 
+                              item.entries.map((entry) => {
+                                const priceDiff = item.cheapest ? entry.price - item.cheapest.price : 0;
+                                const isCheapest = item.cheapest?.supplier === entry.supplier;
+                                const diffPercent = item.cheapest && item.cheapest.price > 0
+                                  ? ((priceDiff / item.cheapest.price) * 100).toFixed(1)
+                                  : '0';
+
+                                return (
+                                  <TableRow
+                                    key={`${item.item_name}-${entry.supplier}`}
+                                    sx={{
+                                      bgcolor: isCheapest ? 'success.light' : 'inherit',
+                                      '&:hover': { bgcolor: isCheapest ? 'success.light' : 'action.hover' }
+                                    }}
+                                  >
+                                    <TableCell>
+                                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                                        {entry.supplier}
+                                        {isCheapest && (
+                                          <Chip
+                                            label="Best"
+                                            color="success"
+                                            size="small"
+                                            sx={{ ml: 1 }}
+                                          />
+                                        )}
+                                      </Box>
+                                    </TableCell>
+                                    <TableCell align="right">
+                                      <Typography
+                                        variant="body2"
+                                        fontWeight={isCheapest ? 'bold' : 'normal'}
+                                        color={isCheapest ? 'success.main' : 'text.primary'}
+                                      >
+                                        {formatPrice(entry.price)}
+                                      </Typography>
+                                    </TableCell>
+                                    <TableCell align="right">
+                                      {!isCheapest && priceDiff > 0 ? (
+                                        <Typography variant="body2" color="error">
+                                          +{formatPrice(priceDiff)} (+{diffPercent}%)
+                                        </Typography>
+                                      ) : (
+                                        <Typography variant="body2" color="text.secondary">
+                                          —
+                                        </Typography>
+                                      )}
+                                    </TableCell>
+                                    <TableCell>
+                                      <Chip
+                                        label={entry.is_unit_price ? 'Per Unit' : 'Total'}
+                                        size="small"
                                         variant="outlined"
                                       />
-                                    )}
-                                  </TableCell>
-                                  <TableCell>
-                                    {entry.is_unit_price ? 'Per Unit' : 'Total'}
-                                  </TableCell>
-                                  <TableCell>
-                                    {new Date(entry.date).toLocaleDateString()}
-                                  </TableCell>
-                                  {isAdmin && (
-                                    <TableCell align="center">
-                                      <IconButton 
-                                        color="error" 
-                                        onClick={() => handleDeleteClick(item.item_name, entry.supplier)}
-                                        size="small"
-                                      >
-                                        <DeleteIcon />
-                                      </IconButton>
                                     </TableCell>
-                                  )}
-                                </TableRow>
-                              ))
+                                    <TableCell>
+                                      <Typography variant="body2" color="text.secondary">
+                                        {new Date(entry.date).toLocaleDateString()}
+                                      </Typography>
+                                    </TableCell>
+                                    {canEdit && (
+                                      <TableCell align="center">
+                                        <IconButton
+                                          color="error"
+                                          onClick={() => handleDeleteClick(item.item_name, entry.supplier)}
+                                          size="small"
+                                        >
+                                          <DeleteIcon />
+                                        </IconButton>
+                                      </TableCell>
+                                    )}
+                                  </TableRow>
+                                );
+                              })
                             ) : (
                               <TableRow>
-                                <TableCell colSpan={canEdit ? 5 : 4} align="center">
+                                <TableCell colSpan={canEdit ? 6 : 5} align="center">
                                   No price entries found
                                 </TableCell>
                               </TableRow>

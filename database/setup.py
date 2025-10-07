@@ -91,6 +91,211 @@ def setup_database():
                 ON price_history(item_name, timestamp DESC)
             """)
 
+            # Create suppliers table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS suppliers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    contact_person TEXT,
+                    email TEXT,
+                    phone TEXT,
+                    address TEXT,
+                    city TEXT,
+                    state TEXT,
+                    zip_code TEXT,
+                    country TEXT DEFAULT 'USA',
+                    website TEXT,
+                    notes TEXT,
+                    rating INTEGER CHECK(rating >= 1 AND rating <= 5),
+                    is_active INTEGER DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Create index on suppliers
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_suppliers_name
+                ON suppliers(name)
+            """)
+
+            # Create index on suppliers active status
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_suppliers_active
+                ON suppliers(is_active)
+            """)
+
+            # Create locations table (warehouses/storage locations)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    address TEXT,
+                    city TEXT,
+                    state TEXT,
+                    zip_code TEXT,
+                    country TEXT DEFAULT 'USA',
+                    location_type TEXT CHECK(location_type IN ('warehouse', 'store', 'storage', 'distribution', 'other')) DEFAULT 'warehouse',
+                    capacity INTEGER,
+                    current_utilization INTEGER DEFAULT 0,
+                    manager_name TEXT,
+                    contact_phone TEXT,
+                    contact_email TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    notes TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Create item_locations junction table (track items across locations)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS item_locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_name TEXT NOT NULL,
+                    location_id INTEGER NOT NULL,
+                    quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+                    aisle TEXT,
+                    shelf TEXT,
+                    bin TEXT,
+                    notes TEXT,
+                    last_counted DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (item_name) REFERENCES items(item_name) ON DELETE CASCADE,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE,
+                    UNIQUE(item_name, location_id)
+                )
+            """)
+
+            # Create batches table (for batch/lot tracking and expiry)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS batches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_number TEXT UNIQUE NOT NULL,
+                    item_name TEXT NOT NULL,
+                    location_id INTEGER,
+                    quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+                    manufacturing_date DATE,
+                    expiry_date DATE,
+                    received_date DATE DEFAULT CURRENT_DATE,
+                    supplier_id INTEGER,
+                    cost_per_unit REAL,
+                    status TEXT CHECK(status IN ('active', 'expired', 'recalled', 'quarantined', 'sold_out')) DEFAULT 'active',
+                    notes TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (item_name) REFERENCES items(item_name) ON DELETE CASCADE,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL,
+                    FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
+                )
+            """)
+
+            # Create stock_adjustments table (manual inventory changes with reasons)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS stock_adjustments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_name TEXT NOT NULL,
+                    location_id INTEGER,
+                    batch_id INTEGER,
+                    adjustment_type TEXT CHECK(adjustment_type IN ('increase', 'decrease')) NOT NULL,
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    reason TEXT CHECK(reason IN (
+                        'damaged', 'stolen', 'lost', 'expired', 'returned',
+                        'found', 'correction', 'transfer', 'donation', 'sample', 'other'
+                    )) NOT NULL,
+                    reason_notes TEXT,
+                    adjusted_by TEXT NOT NULL,
+                    approved_by TEXT,
+                    reference_number TEXT,
+                    adjustment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (item_name) REFERENCES items(item_name) ON DELETE CASCADE,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL,
+                    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE SET NULL
+                )
+            """)
+
+            # Create alerts table (for reorder and expiry notifications)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alert_type TEXT CHECK(alert_type IN (
+                        'low_stock', 'reorder', 'expiring_soon', 'expired',
+                        'overstock', 'location_full', 'batch_recall'
+                    )) NOT NULL,
+                    severity TEXT CHECK(severity IN ('low', 'medium', 'high', 'critical')) DEFAULT 'medium',
+                    item_name TEXT,
+                    location_id INTEGER,
+                    batch_id INTEGER,
+                    message TEXT NOT NULL,
+                    is_read INTEGER DEFAULT 0,
+                    is_resolved INTEGER DEFAULT 0,
+                    resolved_by TEXT,
+                    resolved_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (item_name) REFERENCES items(item_name) ON DELETE CASCADE,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+                )
+            """)
+
+            # Add reorder_level and reorder_quantity to items table if not exists
+            cursor.execute("""
+                SELECT COUNT(*) FROM pragma_table_info('items')
+                WHERE name='reorder_level'
+            """)
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("ALTER TABLE items ADD COLUMN reorder_level INTEGER DEFAULT 10")
+                cursor.execute("ALTER TABLE items ADD COLUMN reorder_quantity INTEGER DEFAULT 50")
+                logging.info("Added reorder_level and reorder_quantity columns to items table")
+
+            # Create indexes for better performance
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_item_locations_item
+                ON item_locations(item_name)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_item_locations_location
+                ON item_locations(location_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_batches_item
+                ON batches(item_name)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_batches_expiry
+                ON batches(expiry_date)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_batches_status
+                ON batches(status)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_stock_adjustments_item
+                ON stock_adjustments(item_name)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_stock_adjustments_date
+                ON stock_adjustments(adjustment_date DESC)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_alerts_unread
+                ON alerts(is_read, is_resolved)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_alerts_type
+                ON alerts(alert_type)
+            """)
+
             logging.info("Database tables and indexes created successfully")
     except Exception as e:
         logging.error(f"Error setting up database: {e}")

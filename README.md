@@ -1,30 +1,28 @@
 # Inventory Management System
 
-A full-stack inventory management system with user authentication, role-based access control, and real-time data management.
+A full-stack inventory management system built with FastAPI (Python) and React (TypeScript). Track inventory items, manage suppliers, locations, batches, prices, and generate comprehensive reports.
 
 ## Features
 
-- 📦 **Inventory Management** - Add, edit, delete, and track inventory items
-- 👥 **User Management** - Role-based access (Admin, Editor, Viewer)
-- 🏷️ **Groups/Categories** - Organize items by groups
-- 💰 **Price Tracking** - Track prices from multiple suppliers
-- 📊 **Dashboard** - View statistics and low stock alerts
-- 📈 **Reports** - Generate inventory reports
-- 🔐 **Authentication** - Secure JWT-based authentication
+### Core Functionality
+- **Inventory Management** - Track items with quantities, groups, and custom fields
+- **Multi-Supplier Pricing** - Compare prices across multiple suppliers
+- **Multi-Location Tracking** - Manage inventory across warehouses and stores
+- **Batch Management** - Track batches with expiry dates and manufacturing info
+- **Stock Adjustments** - Record manual inventory changes with reasons
+- **Alerts & Notifications** - Low stock, expiring items, and reorder alerts
+- **User Management** - Role-based access (Admin, Editor, Viewer)
+- **Reports** - Low stock reports, inventory summaries, activity logs
+- **Price History** - Track price changes over time
 
-## Tech Stack
-
-### Backend
-- **Python 3.x** with FastAPI
-- **SQLite** database
-- **JWT** authentication
-- **Uvicorn** ASGI server
-
-### Frontend
-- **React 18** with TypeScript
-- **Material-UI (MUI)** components
-- **Axios** for API calls
-- **React Router** for navigation
+### Technical Features
+- RESTful API with FastAPI
+- SQLite database with proper indexing
+- JWT authentication
+- Material-UI React frontend
+- Real-time updates
+- CSV export functionality
+- Backup system
 
 ## Quick Start
 
@@ -33,260 +31,391 @@ A full-stack inventory management system with user authentication, role-based ac
 - Node.js 14+
 - npm or yarn
 
-### Installation & Running
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd Inventory-Management-System
+   ```
+
+2. **Install Python dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Install frontend dependencies**
+   ```bash
+   cd frontend
+   npm install
+   cd ..
+   ```
+
+4. **Initialize database with sample data**
+   ```bash
+   python populate_data.py
+   ```
+
+### Running the Application
 
 **Option 1: Automated (Recommended)**
 ```bash
 python run.py
 ```
+This will start both backend and frontend servers automatically.
 
-**Option 2: Manual**
+**Option 2: Manual Start**
 
-1. **Backend:**
+1. Start the backend (Terminal 1):
+   ```bash
+   python run.py --backend-only
+   ```
+
+2. Start the frontend (Terminal 2):
+   ```bash
+   cd frontend
+   npm start
+   ```
+
+**Option 3: Use batch scripts (Windows)**
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run backend server
-python api.py
+START_APP.bat
 ```
 
-2. **Frontend:**
-```bash
-# Navigate to frontend
-cd frontend
+### Access the Application
 
-# Install dependencies
-npm install
-
-# Start development server
-npm start
-```
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- API Documentation: http://localhost:8000/docs
 
 ### Default Login
-- **Username:** `admin`
-- **Password:** `1234`
+- Username: `admin`
+- Password: `1234`
 
-## Database Viewer
+## Project Structure
 
-To view the database contents:
-```bash
-python view_database.py
+```
+Inventory-Management-System/
+├── api.py                      # Main FastAPI application
+├── run.py                      # Application runner
+├── requirements.txt            # Python dependencies
+├── populate_data.py            # Sample data generator
+├── generate_sample_data.py     # Sample data script
+│
+├── database/
+│   ├── db_connection.py        # Database connection handler
+│   └── setup.py                # Database schema and initialization
+│
+├── models/                     # Pydantic models
+│   ├── item.py
+│   ├── user.py
+│   ├── price_entry.py
+│   └── history_entry.py
+│
+├── services/                   # Business logic
+│   ├── inventory_service.py
+│   └── user_service.py
+│
+├── utils/
+│   └── logging_config.py       # Logging configuration
+│
+├── frontend/                   # React TypeScript application
+│   ├── public/
+│   ├── src/
+│   │   ├── components/         # Reusable components
+│   │   │   ├── NavBar.tsx
+│   │   │   ├── AlertsPanel.tsx
+│   │   │   └── FormFields.tsx
+│   │   ├── pages/              # Page components
+│   │   │   ├── Dashboard.tsx
+│   │   │   ├── Inventory.tsx
+│   │   │   ├── Suppliers.tsx
+│   │   │   ├── Locations.tsx
+│   │   │   ├── Batches.tsx
+│   │   │   ├── StockAdjustments.tsx
+│   │   │   ├── Prices.tsx
+│   │   │   ├── Groups.tsx
+│   │   │   ├── Users.tsx
+│   │   │   ├── Reports.tsx
+│   │   │   └── Settings.tsx
+│   │   ├── services/           # API services
+│   │   │   └── api.ts
+│   │   ├── contexts/           # React contexts
+│   │   │   └── AuthContext.tsx
+│   │   └── types/              # TypeScript types
+│   └── package.json
+│
+├── docs/                       # Documentation
+│   ├── README.md
+│   ├── DEVELOPER.md
+│   ├── HOW_TO_RUN.md
+│   ├── INSTALL.md
+│   └── QUICK_START.md
+│
+└── tests/                      # Test files
 ```
 
-Install tabulate for better formatting:
+## Database Schema
+
+### Main Tables
+- **users** - User accounts with roles
+- **items** - Inventory items
+- **groups** - Item categories
+- **prices** - Current prices from suppliers
+- **price_history** - Historical price data
+- **suppliers** - Supplier information
+- **locations** - Warehouse/storage locations
+- **batches** - Batch/lot tracking
+- **stock_adjustments** - Manual inventory adjustments
+- **alerts** - System notifications
+- **history** - Activity log
+
+## API Endpoints
+
+### Authentication
+- `POST /token` - Login and get JWT token
+- `GET /users/me` - Get current user info
+
+### Inventory
+- `GET /inventory` - List all items
+- `GET /inventory/{item_name}` - Get specific item
+- `POST /inventory` - Create new item
+- `PUT /inventory/{item_name}` - Update item
+- `DELETE /inventory/{item_name}` - Delete item
+- `POST /inventory/search` - Search items
+- `GET /inventory/{item_name}/history` - Get item history
+
+### Suppliers
+- `GET /suppliers` - List suppliers
+- `POST /suppliers` - Create supplier
+- `PUT /suppliers/{id}` - Update supplier
+- `DELETE /suppliers/{id}` - Delete supplier
+- `GET /suppliers/{id}/items` - Get supplier items
+- `GET /suppliers/search/{name}` - Search suppliers
+
+### Locations
+- `GET /locations` - List locations
+- `POST /locations` - Create location
+- `PUT /locations/{id}` - Update location
+- `DELETE /locations/{id}` - Delete location
+- `GET /locations/{id}/items` - Get location inventory
+- `POST /item-locations` - Assign item to location
+
+### Batches
+- `GET /batches` - List batches
+- `POST /batches` - Create batch
+- `PUT /batches/{id}` - Update batch
+- `GET /items/{item_name}/batches` - Get item batches
+
+### Stock Adjustments
+- `GET /stock-adjustments` - List adjustments
+- `POST /stock-adjustments` - Create adjustment
+
+### Alerts
+- `GET /alerts` - List alerts
+- `PUT /alerts/{id}` - Update alert (mark read/resolved)
+- `POST /alerts/check-reorder-levels` - Check for low stock
+
+### Prices
+- `GET /prices` - List all prices
+- `GET /prices/{item_name}` - Get item prices
+- `POST /prices/{item_name}` - Add price
+- `PUT /prices/{item_name}` - Update price
+- `DELETE /prices/{item_name}` - Delete price
+- `GET /prices/{item_name}/cheapest` - Get cheapest supplier
+- `GET /prices/{item_name}/history` - Get price history
+- `GET /prices/compare/all` - Compare all prices
+
+### Groups
+- `GET /groups` - List groups
+- `POST /groups` - Create group
+- `PUT /groups/{old_name}` - Rename group
+- `DELETE /groups/{group_name}` - Delete group
+
+### Users
+- `GET /users` - List users (admin only)
+- `POST /users` - Create user (admin only)
+- `PUT /users/{username}` - Update user (admin only)
+- `DELETE /users/{username}` - Delete user (admin only)
+- `POST /users/me/change-password` - Change own password
+
+### Reports
+- `GET /reports/low-stock` - Low stock report
+- `GET /reports/inventory` - Inventory summary
+- `GET /reports/activity` - Activity log
+
+### System
+- `POST /backup` - Create database backup
+- `GET /export/csv` - Export inventory to CSV
+- `GET /health` - Health check
+
+**Full API Documentation:** http://localhost:8000/docs
+
+## User Roles
+
+### Admin
+- Full access to all features
+- User management
+- System configuration
+- Delete operations
+- Database backup
+
+### Editor
+- Create, read, and update items
+- Manage inventory, suppliers, locations
+- Cannot delete items
+- Cannot manage users
+
+### Viewer
+- Read-only access
+- View inventory, reports, and history
+- Cannot make changes
+
+## Sample Data
+
+The `populate_data.py` script creates:
+- 5 item groups (Electronics, Peripherals, Furniture, Office Supplies, Accessories)
+- 5 suppliers with contact information
+- 4 locations (warehouses/stores)
+- 21 inventory items
+- 50+ prices from multiple suppliers
+- 89 price history entries
+- 31 batches with expiry dates
+- 50 stock adjustments
+- 8 alerts (low stock, expiring items)
+- 100 history entries
+
+## Configuration
+
+### Backend Configuration
+Edit `api.py` for settings:
+- Database: `inventory.db`
+- Port: 8000 (default)
+- JWT secret key
+- Token expiration time
+
+### Frontend Configuration
+Edit `frontend/src/config.ts`:
+- API URL: http://localhost:8000
+- Port: 3000
+- Timeout settings
+
+## Development
+
+### Running Tests
 ```bash
-pip install tabulate
+cd tests
+python -m pytest
+```
+
+### Database Operations
+
+**View database contents:**
+```bash
+python tests/view_database.py
+```
+
+**Reset database:**
+```bash
+# Delete existing database
+rm inventory.db
+
+# Recreate with sample data
+python populate_data.py
+```
+
+**Create backup:**
+```bash
+python api.py
+# Then use POST /backup endpoint
 ```
 
 ## Troubleshooting
 
+### Database Locked Error
+Stop all running servers before database operations:
+```bash
+# Windows
+taskkill /F /IM python.exe
+
+# Linux/Mac
+pkill -f "python"
+```
+
 ### Login Issues
-1. Delete old database: Delete `inventory.db`, `inventory.db-shm`, `inventory.db-wal`
-2. Restart: `python run.py`
-3. Use default credentials: `admin` / `1234`
+1. Delete database files: `inventory.db`, `inventory.db-shm`, `inventory.db-wal`
+2. Run `python populate_data.py`
+3. Login with `admin` / `1234`
+
+### CORS Errors
+Ensure servers are running on correct ports:
+- Backend: http://localhost:8000
+- Frontend: http://localhost:3000
+
+### Module Not Found
+```bash
+pip install -r requirements.txt
+```
 
 ### Frontend Errors
-- Refresh the page (Ctrl+F5)
-- Clear browser cache
-- Check browser console (F12) for errors
+```bash
+cd frontend
+rm -rf node_modules package-lock.json
+npm install
+npm start
+```
+
+### "filter is not a function" Error
+Already fixed in latest version. Make sure you have the latest code.
+
+## Tech Stack
+
+### Backend
+- **FastAPI** - Modern Python web framework
+- **SQLite** - Lightweight database
+- **Pydantic** - Data validation
+- **JWT** - Authentication
+- **Uvicorn** - ASGI server
+
+### Frontend
+- **React 18** - UI library
+- **TypeScript** - Type safety
+- **Material-UI (MUI)** - Component library
+- **Axios** - HTTP client
+- **React Router** - Navigation
+- **Chart.js** - Data visualization
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
 This project is for educational purposes.
 
-# Inventory Management System (old content below)
+## Support
 
-A full-stack inventory management system with a React frontend and FastAPI backend.
+For issues and questions:
+- Check documentation in `docs/`
+- Review API docs at http://localhost:8000/docs
+- Check browser console (F12) for errors
+- Create an issue on GitHub
 
-## Features
+## Version History
 
-- User authentication and role-based access control (Admin, Editor, Viewer)
-- Inventory management with custom fields
-- Group-based organization of inventory items
-- History tracking for inventory items
-- User management
-- Price tracking with supplier management
-- Reporting and analytics
-- Low stock notifications
-- Dashboard with stats and visualizations
-- Database backup and restore functionality
-
-## Tech Stack
-
-### Backend
-- FastAPI
-- SQLite
-- JWT Authentication
-- Modular architecture with services pattern
-
-### Frontend
-- React
-- Material UI
-- Chart.js for data visualization
-- React Router for navigation
-
-## Project Structure
-
-The Inventory Management System is a full-stack application consisting of:
-
-- **Backend API**: Built with FastAPI (Python), handling data operations and business logic
-- **Frontend**: Built with React and TypeScript, providing a modern and responsive user interface
-- **Database**: SQLite for development, can be configured for other databases in production
-
-### Key Directories
-
-- `/frontend`: React TypeScript frontend application
-- `/models`: SQLAlchemy database models
-- `/services`: Business logic services
-- `/utils`: Utility functions
-- `/database`: Database connection and repository implementations
-
-## Getting Started
-
-### Prerequisites
-- Python 3.8+
-- Node.js 14+
-- npm or yarn
-
-### Environment Variables
-
-The application supports the following environment variables:
-
-- `API_PORT`: Port for the backend API server (default: 8001)
-- `FRONTEND_PORT`: Port for the frontend development server (default: 3000)
-
-You can set these variables before running, or use the `--port` option with `run.py`.
-
-### Easy Setup using run.py
-
-You can use the provided run.py script to set up everything automatically:
-
-```
-python run.py
-```
-
-This will:
-1. Create a Python virtual environment
-2. Install all required Python packages
-3. Start the backend server
-4. Install frontend dependencies (first run only)
-5. Start the React development server
-6. Open your browser to the application
-
-Additional options:
-- `python run.py --backend-only` - Run only the backend
-- `python run.py --frontend-only` - Run only the frontend
-- `python run.py --cli` - Run the command-line interface
-- `python run.py --port 8080` - Specify a custom port for the API
-
-### Manual Setup
-
-#### Backend Setup
-
-1. Create and activate a virtual environment:
-
-```
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-2. Install dependencies:
-
-```
-pip install -r requirements.txt
-```
-
-3. Start the backend server:
-
-```
-uvicorn api:app --reload --port 8001
-```
-
-The backend API will be available at http://localhost:8001. You can access the Swagger UI documentation at http://localhost:8001/docs.
-
-#### Frontend Setup
-
-1. Navigate to the frontend directory:
-
-```
-cd frontend
-```
-
-2. Install dependencies:
-
-```
-npm install
-```
-
-3. Start the development server:
-
-```
-npm start
-```
-
-The frontend application will be available at http://localhost:3000.
-
-## Default Login
-
-- Username: user
-- Password: 1234
-- Role: admin
-
-## API Endpoints
-
-### Authentication
-- POST /token - Get authentication token
-
-### Users
-- GET /users/me - Get current user
-- GET /users - Get all users (admin only)
-- POST /users - Create a user (admin only)
-- PUT /users/{username} - Update a user (admin only)
-- DELETE /users/{username} - Delete a user (admin only)
-
-### Inventory
-- GET /inventory - Get all inventory items
-- POST /inventory - Add inventory item (admin/editor)
-- PUT /inventory/{item_name} - Update inventory item (admin/editor)
-- DELETE /inventory/{item_name} - Delete inventory item (admin)
-- GET /inventory/{item_name}/history - Get item history
-- PUT /inventory/{item_name}/group - Update item's group (admin/editor)
-- PUT /inventory/{item_name}/custom-fields - Update item's custom fields (admin/editor)
-
-### Groups
-- GET /groups - Get all groups
-- PUT /groups/{old_name} - Rename a group (admin)
-
-### Price Management
-- GET /prices - Get all prices
-- GET /prices/{item_name} - Get price for an item
-- PUT /prices/{item_name} - Set/update price
-- GET /prices/{item_name}/history - View price history
-- GET /prices/{item_name}/cheapest - Get cheapest supplier
-- DELETE /prices/{item_name} - Delete price entries
-
-### Reports
-- GET /reports/low-stock - Get low stock report
-- POST /reports/inventory - Generate inventory report
-- GET /reports/activity - Get activity report
-
-### System
-- POST /backup - Create a backup (admin)
-
-## License
-
-This project is licensed under the MIT License.
-
-## TypeScript Frontend
-
-The frontend has been fully converted to TypeScript for better code quality and developer experience. Features include:
-
-- Type-safe API interactions
-- Improved component props validation
-- Better code organization with clear interfaces
-- Dark mode support
-- Modern UI with Material Design
+### v1.0.0 (Current)
+- Core inventory management
+- Multi-supplier pricing system
+- Multi-location tracking
+- Batch/lot management with expiry tracking
+- Stock adjustment system with reasons
+- Alert and notification system
+- User authentication with JWT
 - Role-based access control
-
-For more details about the frontend, see [frontend/README.md](frontend/README.md).
+- Dashboard with statistics
+- Reports and CSV export
+- Sample data generator

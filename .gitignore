@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+nul
 
 # Virtual Environment
 .env
@@ -94,3 +95,4 @@ htmlcov/
 # Keep .gitkeep files
 !logs/.gitkeep 
 .claude/
+*.csv

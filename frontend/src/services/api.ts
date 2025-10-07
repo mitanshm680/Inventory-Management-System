@@ -192,6 +192,48 @@ export class ApiService {
         return response.data;
     }
 
+    async comparePrices(): Promise<any> {
+        const response = await this.api.get(`${API_CONFIG.ENDPOINTS.PRICES}/compare/all`);
+        return response.data;
+    }
+
+    // Suppliers
+    async getSuppliers(activeOnly: boolean = false): Promise<any> {
+        const params = activeOnly ? { active_only: true } : {};
+        const response = await this.api.get('/suppliers', { params });
+        return response.data;
+    }
+
+    async getSupplier(supplierId: number): Promise<any> {
+        const response = await this.api.get(`/suppliers/${supplierId}`);
+        return response.data;
+    }
+
+    async createSupplier(supplierData: any): Promise<any> {
+        const response = await this.api.post('/suppliers', supplierData);
+        return response.data;
+    }
+
+    async updateSupplier(supplierId: number, updates: any): Promise<any> {
+        const response = await this.api.put(`/suppliers/${supplierId}`, updates);
+        return response.data;
+    }
+
+    async deleteSupplier(supplierId: number): Promise<any> {
+        const response = await this.api.delete(`/suppliers/${supplierId}`);
+        return response.data;
+    }
+
+    async getSupplierItems(supplierId: number): Promise<any> {
+        const response = await this.api.get(`/suppliers/${supplierId}/items`);
+        return response.data;
+    }
+
+    async searchSuppliers(name: string): Promise<any> {
+        const response = await this.api.get(`/suppliers/search/${name}`);
+        return response.data;
+    }
+
     // Reports
     async getLowStockReport(threshold?: number): Promise<any> {
         const params = threshold ? { threshold } : {};
@@ -231,6 +273,100 @@ export class ApiService {
             params,
             responseType: 'blob'
         });
+        return response.data;
+    }
+
+    // Locations
+    async getLocations(activeOnly: boolean = false): Promise<any> {
+        const params = activeOnly ? { active_only: true } : {};
+        const response = await this.api.get('/locations', { params });
+        return response.data;
+    }
+
+    async getLocation(locationId: number): Promise<any> {
+        const response = await this.api.get(`/locations/${locationId}`);
+        return response.data;
+    }
+
+    async createLocation(locationData: any): Promise<any> {
+        const response = await this.api.post('/locations', locationData);
+        return response.data;
+    }
+
+    async updateLocation(locationId: number, updates: any): Promise<any> {
+        const response = await this.api.put(`/locations/${locationId}`, updates);
+        return response.data;
+    }
+
+    async deleteLocation(locationId: number): Promise<any> {
+        const response = await this.api.delete(`/locations/${locationId}`);
+        return response.data;
+    }
+
+    async getLocationItems(locationId: number): Promise<any> {
+        const response = await this.api.get(`/locations/${locationId}/items`);
+        return response.data;
+    }
+
+    // Item Locations
+    async assignItemToLocation(itemLocationData: any): Promise<any> {
+        const response = await this.api.post('/item-locations', itemLocationData);
+        return response.data;
+    }
+
+    async getItemLocations(itemName: string): Promise<any> {
+        const response = await this.api.get(`/items/${itemName}/locations`);
+        return response.data;
+    }
+
+    // Batches
+    async getBatches(filters?: { status?: string; expiring_soon?: boolean }): Promise<any> {
+        const response = await this.api.get('/batches', { params: filters });
+        return response.data;
+    }
+
+    async createBatch(batchData: any): Promise<any> {
+        const response = await this.api.post('/batches', batchData);
+        return response.data;
+    }
+
+    async updateBatch(batchId: number, updates: any): Promise<any> {
+        const response = await this.api.put(`/batches/${batchId}`, updates);
+        return response.data;
+    }
+
+    async getItemBatches(itemName: string, activeOnly: boolean = true): Promise<any> {
+        const params = { active_only: activeOnly };
+        const response = await this.api.get(`/items/${itemName}/batches`, { params });
+        return response.data;
+    }
+
+    // Stock Adjustments
+    async getStockAdjustments(itemName?: string, limit: number = 100): Promise<any> {
+        const params: any = { limit };
+        if (itemName) params.item_name = itemName;
+        const response = await this.api.get('/stock-adjustments', { params });
+        return response.data;
+    }
+
+    async createStockAdjustment(adjustmentData: any): Promise<any> {
+        const response = await this.api.post('/stock-adjustments', adjustmentData);
+        return response.data;
+    }
+
+    // Alerts
+    async getAlerts(filters?: { unread_only?: boolean; alert_type?: string }): Promise<any> {
+        const response = await this.api.get('/alerts', { params: filters });
+        return response.data;
+    }
+
+    async updateAlert(alertId: number, updates: any): Promise<any> {
+        const response = await this.api.put(`/alerts/${alertId}`, updates);
+        return response.data;
+    }
+
+    async checkReorderLevels(): Promise<any> {
+        const response = await this.api.post('/alerts/check-reorder-levels');
         return response.data;
     }
 

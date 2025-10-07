@@ -9,6 +9,9 @@ import platform
 import webbrowser
 
 def main():
+    # Check for command line argument
+    populate_data = len(sys.argv) > 1 and sys.argv[1] == "--populate"
+
     print("=" * 60)
     print("  INVENTORY MANAGEMENT SYSTEM")
     print("  Starting Application...")
@@ -87,6 +90,31 @@ def main():
         webbrowser.open('http://localhost:3000')
     except:
         print("[WARN] Could not open browser automatically")
+
+    # Populate data if requested
+    if populate_data:
+        print()
+        print("[INFO] Populating sample data...")
+        print()
+        try:
+            import requests
+            # Wait a bit more to ensure server is fully ready
+            time.sleep(2)
+            # Run populate script
+            populate_process = subprocess.run(
+                ["python", "populate_data.py"],
+                capture_output=False
+            )
+            if populate_process.returncode == 0:
+                print()
+                print("[INFO] ✅ Sample data populated successfully!")
+                print("[INFO] Refresh your browser to see the data")
+            else:
+                print()
+                print("[WARN] Sample data population failed")
+        except Exception as e:
+            print(f"[WARN] Could not populate data: {e}")
+            print("[INFO] You can manually run: python populate_data.py")
 
     print()
     print("Press CTRL+C to stop the servers...")

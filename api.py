@@ -147,6 +147,85 @@ class SearchQuery(BaseModel):
     search_term: str
     search_type: Optional[str] = "contains"  # starts_with, contains, exact
 
+# New Pydantic Models for Inventory Tracking Features
+
+class LocationCreate(BaseModel):
+    name: str
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    country: Optional[str] = "USA"
+    location_type: Optional[str] = "warehouse"
+    capacity: Optional[int] = None
+    current_utilization: Optional[int] = 0
+    manager_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    contact_email: Optional[str] = None
+    is_active: Optional[bool] = True
+    notes: Optional[str] = None
+
+class LocationUpdate(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    country: Optional[str] = None
+    location_type: Optional[str] = None
+    capacity: Optional[int] = None
+    current_utilization: Optional[int] = None
+    manager_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    contact_email: Optional[str] = None
+    is_active: Optional[bool] = None
+    notes: Optional[str] = None
+
+class ItemLocationCreate(BaseModel):
+    item_name: str
+    location_id: int
+    quantity: int
+    aisle: Optional[str] = None
+    shelf: Optional[str] = None
+    bin: Optional[str] = None
+    notes: Optional[str] = None
+
+class BatchCreate(BaseModel):
+    batch_number: str
+    item_name: str
+    location_id: Optional[int] = None
+    quantity: int
+    manufacturing_date: Optional[str] = None
+    expiry_date: Optional[str] = None
+    received_date: Optional[str] = None
+    supplier_id: Optional[int] = None
+    cost_per_unit: Optional[float] = None
+    status: Optional[str] = "active"
+    notes: Optional[str] = None
+
+class BatchUpdate(BaseModel):
+    quantity: Optional[int] = None
+    location_id: Optional[int] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+class StockAdjustmentCreate(BaseModel):
+    item_name: str
+    location_id: Optional[int] = None
+    batch_id: Optional[int] = None
+    adjustment_type: str  # increase or decrease
+    quantity: int
+    reason: str
+    reason_notes: Optional[str] = None
+    adjusted_by: str
+    approved_by: Optional[str] = None
+    reference_number: Optional[str] = None
+
+class AlertUpdate(BaseModel):
+    is_read: Optional[bool] = None
+    is_resolved: Optional[bool] = None
+    resolved_by: Optional[str] = None
+
 # ============================================================================
 # Authentication
 # ============================================================================
@@ -590,6 +669,1155 @@ async def delete_price(item_name: str, supplier: str = "default", current_user: 
     except Exception as e:
         logging.error(f"Error deleting price: {e}")
         raise HTTPException(status_code=500, detail="Error deleting price")
+
+@app.get("/prices/{item_name}/cheapest")
+async def get_cheapest_price(item_name: str, current_user: User = Depends(get_current_user)):
+    """Get the cheapest price for an item across all suppliers"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT item_name, price, supplier, date_updated
+                FROM prices
+                WHERE item_name = ?
+                ORDER BY price ASC
+                LIMIT 1
+            """, (item_name,))
+            result = cursor.fetchone()
+            if result:
+                return {
+                    "item_name": result['item_name'],
+                    "price": result['price'],
+                    "supplier": result['supplier'],
+                    "date_updated": result['date_updated']
+                }
+            raise HTTPException(status_code=404, detail="No prices found for this item")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching cheapest price: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching cheapest price")
+
+@app.get("/prices/{item_name}/history")
+async def get_price_history(item_name: str, current_user: User = Depends(get_current_user)):
+    """Get price history for a specific item"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT price, supplier, timestamp
+                FROM price_history
+                WHERE item_name = ?
+                ORDER BY timestamp DESC
+                LIMIT 100
+            """, (item_name,))
+            history = []
+            for row in cursor.fetchall():
+                history.append({
+                    "price": row['price'],
+                    "supplier": row['supplier'],
+                    "date": row['timestamp']
+                })
+            return {"history": history, "item_name": item_name}
+    except Exception as e:
+        logging.error(f"Error fetching price history: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching price history")
+
+@app.post("/prices/{item_name}")
+async def add_price(
+    item_name: str,
+    price_update: PriceUpdate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Add a new price entry (alias for update)"""
+    return await update_price(item_name, price_update, current_user)
+
+@app.get("/prices/compare/all")
+async def compare_all_prices(current_user: User = Depends(get_current_user)):
+    """Get price comparison across all items and suppliers"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    item_name,
+                    supplier,
+                    price,
+                    date_updated,
+                    RANK() OVER (PARTITION BY item_name ORDER BY price ASC) as price_rank
+                FROM prices
+                ORDER BY item_name, price ASC
+            """)
+            comparison = {}
+            for row in cursor.fetchall():
+                item = row['item_name']
+                if item not in comparison:
+                    comparison[item] = {
+                        'cheapest': None,
+                        'most_expensive': None,
+                        'suppliers': []
+                    }
+
+                supplier_data = {
+                    'supplier': row['supplier'],
+                    'price': row['price'],
+                    'date_updated': row['date_updated'],
+                    'is_cheapest': row['price_rank'] == 1
+                }
+                comparison[item]['suppliers'].append(supplier_data)
+
+                if comparison[item]['cheapest'] is None or row['price'] < comparison[item]['cheapest']['price']:
+                    comparison[item]['cheapest'] = supplier_data
+                if comparison[item]['most_expensive'] is None or row['price'] > comparison[item]['most_expensive']['price']:
+                    comparison[item]['most_expensive'] = supplier_data
+
+            return {"comparison": comparison}
+    except Exception as e:
+        logging.error(f"Error comparing prices: {e}")
+        raise HTTPException(status_code=500, detail="Error comparing prices")
+
+# ============================================================================
+# Supplier Management Endpoints
+# ============================================================================
+
+class SupplierCreate(BaseModel):
+    name: str
+    contact_person: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    country: Optional[str] = "USA"
+    website: Optional[str] = None
+    notes: Optional[str] = None
+    rating: Optional[int] = None
+    is_active: Optional[bool] = True
+
+class SupplierUpdate(BaseModel):
+    name: Optional[str] = None
+    contact_person: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    country: Optional[str] = None
+    website: Optional[str] = None
+    notes: Optional[str] = None
+    rating: Optional[int] = None
+    is_active: Optional[bool] = None
+
+@app.get("/suppliers")
+async def get_all_suppliers(
+    active_only: bool = False,
+    current_user: User = Depends(get_current_user)
+):
+    """Get all suppliers"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            if active_only:
+                cursor.execute("""
+                    SELECT * FROM suppliers WHERE is_active = 1 ORDER BY name
+                """)
+            else:
+                cursor.execute("""
+                    SELECT * FROM suppliers ORDER BY name
+                """)
+
+            suppliers = []
+            for row in cursor.fetchall():
+                suppliers.append({
+                    "id": row['id'],
+                    "name": row['name'],
+                    "contact_person": row['contact_person'],
+                    "email": row['email'],
+                    "phone": row['phone'],
+                    "address": row['address'],
+                    "city": row['city'],
+                    "state": row['state'],
+                    "zip_code": row['zip_code'],
+                    "country": row['country'],
+                    "website": row['website'],
+                    "notes": row['notes'],
+                    "rating": row['rating'],
+                    "is_active": bool(row['is_active']),
+                    "created_at": row['created_at'],
+                    "updated_at": row['updated_at']
+                })
+            return {"suppliers": suppliers}
+    except Exception as e:
+        logging.error(f"Error fetching suppliers: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching suppliers")
+
+@app.get("/suppliers/{supplier_id}")
+async def get_supplier(supplier_id: int, current_user: User = Depends(get_current_user)):
+    """Get a specific supplier by ID"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "id": row['id'],
+                    "name": row['name'],
+                    "contact_person": row['contact_person'],
+                    "email": row['email'],
+                    "phone": row['phone'],
+                    "address": row['address'],
+                    "city": row['city'],
+                    "state": row['state'],
+                    "zip_code": row['zip_code'],
+                    "country": row['country'],
+                    "website": row['website'],
+                    "notes": row['notes'],
+                    "rating": row['rating'],
+                    "is_active": bool(row['is_active']),
+                    "created_at": row['created_at'],
+                    "updated_at": row['updated_at']
+                }
+            raise HTTPException(status_code=404, detail="Supplier not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching supplier: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching supplier")
+
+@app.post("/suppliers")
+async def create_supplier(
+    supplier: SupplierCreate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Create a new supplier"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO suppliers (
+                    name, contact_person, email, phone, address, city, state,
+                    zip_code, country, website, notes, rating, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                supplier.name, supplier.contact_person, supplier.email, supplier.phone,
+                supplier.address, supplier.city, supplier.state, supplier.zip_code,
+                supplier.country, supplier.website, supplier.notes, supplier.rating,
+                1 if supplier.is_active else 0
+            ))
+            supplier_id = cursor.lastrowid
+            return {
+                "message": "Supplier created successfully",
+                "id": supplier_id,
+                "name": supplier.name
+            }
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Supplier with this name already exists")
+    except Exception as e:
+        logging.error(f"Error creating supplier: {e}")
+        raise HTTPException(status_code=500, detail="Error creating supplier")
+
+@app.put("/suppliers/{supplier_id}")
+async def update_supplier(
+    supplier_id: int,
+    supplier_update: SupplierUpdate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Update supplier information"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Check if supplier exists
+            cursor.execute("SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Supplier not found")
+
+            # Build update query dynamically
+            updates = []
+            params = []
+
+            if supplier_update.name is not None:
+                updates.append("name = ?")
+                params.append(supplier_update.name)
+            if supplier_update.contact_person is not None:
+                updates.append("contact_person = ?")
+                params.append(supplier_update.contact_person)
+            if supplier_update.email is not None:
+                updates.append("email = ?")
+                params.append(supplier_update.email)
+            if supplier_update.phone is not None:
+                updates.append("phone = ?")
+                params.append(supplier_update.phone)
+            if supplier_update.address is not None:
+                updates.append("address = ?")
+                params.append(supplier_update.address)
+            if supplier_update.city is not None:
+                updates.append("city = ?")
+                params.append(supplier_update.city)
+            if supplier_update.state is not None:
+                updates.append("state = ?")
+                params.append(supplier_update.state)
+            if supplier_update.zip_code is not None:
+                updates.append("zip_code = ?")
+                params.append(supplier_update.zip_code)
+            if supplier_update.country is not None:
+                updates.append("country = ?")
+                params.append(supplier_update.country)
+            if supplier_update.website is not None:
+                updates.append("website = ?")
+                params.append(supplier_update.website)
+            if supplier_update.notes is not None:
+                updates.append("notes = ?")
+                params.append(supplier_update.notes)
+            if supplier_update.rating is not None:
+                updates.append("rating = ?")
+                params.append(supplier_update.rating)
+            if supplier_update.is_active is not None:
+                updates.append("is_active = ?")
+                params.append(1 if supplier_update.is_active else 0)
+
+            if not updates:
+                return {"message": "No updates provided"}
+
+            updates.append("updated_at = datetime('now')")
+            params.append(supplier_id)
+
+            query = f"UPDATE suppliers SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, params)
+
+            return {"message": "Supplier updated successfully"}
+    except HTTPException:
+        raise
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Supplier name already exists")
+    except Exception as e:
+        logging.error(f"Error updating supplier: {e}")
+        raise HTTPException(status_code=500, detail="Error updating supplier")
+
+@app.delete("/suppliers/{supplier_id}")
+async def delete_supplier(supplier_id: int, current_user: User = Depends(get_admin_user)):
+    """Delete a supplier"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+            if cursor.rowcount > 0:
+                return {"message": "Supplier deleted successfully"}
+            raise HTTPException(status_code=404, detail="Supplier not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting supplier: {e}")
+        raise HTTPException(status_code=500, detail="Error deleting supplier")
+
+@app.get("/suppliers/{supplier_id}/items")
+async def get_supplier_items(supplier_id: int, current_user: User = Depends(get_current_user)):
+    """Get all items supplied by a specific supplier"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            # First get supplier name
+            cursor.execute("SELECT name FROM suppliers WHERE id = ?", (supplier_id,))
+            supplier_row = cursor.fetchone()
+            if not supplier_row:
+                raise HTTPException(status_code=404, detail="Supplier not found")
+
+            supplier_name = supplier_row['name']
+
+            # Get all items with prices from this supplier
+            cursor.execute("""
+                SELECT DISTINCT p.item_name, p.price, p.date_updated, i.quantity
+                FROM prices p
+                LEFT JOIN items i ON p.item_name = i.item_name
+                WHERE p.supplier = ?
+                ORDER BY p.item_name
+            """, (supplier_name,))
+
+            items = []
+            for row in cursor.fetchall():
+                items.append({
+                    "item_name": row['item_name'],
+                    "price": row['price'],
+                    "quantity": row['quantity'],
+                    "date_updated": row['date_updated']
+                })
+
+            return {
+                "supplier_id": supplier_id,
+                "supplier_name": supplier_name,
+                "items": items,
+                "total_items": len(items)
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching supplier items: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching supplier items")
+
+@app.get("/suppliers/search/{name}")
+async def search_suppliers(name: str, current_user: User = Depends(get_current_user)):
+    """Search suppliers by name"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM suppliers
+                WHERE name LIKE ?
+                ORDER BY name
+            """, (f"%{name}%",))
+
+            suppliers = []
+            for row in cursor.fetchall():
+                suppliers.append({
+                    "id": row['id'],
+                    "name": row['name'],
+                    "contact_person": row['contact_person'],
+                    "email": row['email'],
+                    "phone": row['phone'],
+                    "rating": row['rating'],
+                    "is_active": bool(row['is_active'])
+                })
+            return {"suppliers": suppliers}
+    except Exception as e:
+        logging.error(f"Error searching suppliers: {e}")
+        raise HTTPException(status_code=500, detail="Error searching suppliers")
+
+# ============================================================================
+# LOCATIONS MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.get("/locations")
+async def get_all_locations(
+    active_only: bool = False,
+    current_user: User = Depends(get_current_user)
+):
+    """Get all locations"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            if active_only:
+                cursor.execute("SELECT * FROM locations WHERE is_active = 1 ORDER BY name")
+            else:
+                cursor.execute("SELECT * FROM locations ORDER BY name")
+
+            locations = []
+            for row in cursor.fetchall():
+                locations.append({
+                    "id": row['id'],
+                    "name": row['name'],
+                    "address": row['address'],
+                    "city": row['city'],
+                    "state": row['state'],
+                    "zip_code": row['zip_code'],
+                    "country": row['country'],
+                    "location_type": row['location_type'],
+                    "capacity": row['capacity'],
+                    "current_utilization": row['current_utilization'],
+                    "manager_name": row['manager_name'],
+                    "contact_phone": row['contact_phone'],
+                    "contact_email": row['contact_email'],
+                    "is_active": bool(row['is_active']),
+                    "notes": row['notes'],
+                    "created_at": row['created_at'],
+                    "updated_at": row['updated_at']
+                })
+            return {"locations": locations}
+    except Exception as e:
+        logging.error(f"Error fetching locations: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching locations")
+
+@app.get("/locations/{location_id}")
+async def get_location(location_id: int, current_user: User = Depends(get_current_user)):
+    """Get specific location"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM locations WHERE id = ?", (location_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "id": row['id'],
+                    "name": row['name'],
+                    "address": row['address'],
+                    "city": row['city'],
+                    "state": row['state'],
+                    "zip_code": row['zip_code'],
+                    "country": row['country'],
+                    "location_type": row['location_type'],
+                    "capacity": row['capacity'],
+                    "current_utilization": row['current_utilization'],
+                    "manager_name": row['manager_name'],
+                    "contact_phone": row['contact_phone'],
+                    "contact_email": row['contact_email'],
+                    "is_active": bool(row['is_active']),
+                    "notes": row['notes'],
+                    "created_at": row['created_at'],
+                    "updated_at": row['updated_at']
+                }
+            raise HTTPException(status_code=404, detail="Location not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching location: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching location")
+
+@app.post("/locations")
+async def create_location(
+    location: LocationCreate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Create new location"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO locations (
+                    name, address, city, state, zip_code, country,
+                    location_type, capacity, current_utilization, manager_name,
+                    contact_phone, contact_email, is_active, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                location.name, location.address, location.city, location.state,
+                location.zip_code, location.country, location.location_type,
+                location.capacity, location.current_utilization, location.manager_name,
+                location.contact_phone, location.contact_email,
+                1 if location.is_active else 0, location.notes
+            ))
+            location_id = cursor.lastrowid
+            return {"message": "Location created successfully", "id": location_id}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Location with this name already exists")
+    except Exception as e:
+        logging.error(f"Error creating location: {e}")
+        raise HTTPException(status_code=500, detail="Error creating location")
+
+@app.put("/locations/{location_id}")
+async def update_location(
+    location_id: int,
+    location_update: LocationUpdate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Update location"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM locations WHERE id = ?", (location_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Location not found")
+
+            updates = []
+            params = []
+
+            for field in ['name', 'address', 'city', 'state', 'zip_code', 'country',
+                         'location_type', 'capacity', 'current_utilization', 'manager_name',
+                         'contact_phone', 'contact_email', 'notes']:
+                value = getattr(location_update, field, None)
+                if value is not None:
+                    updates.append(f"{field} = ?")
+                    params.append(value)
+
+            if location_update.is_active is not None:
+                updates.append("is_active = ?")
+                params.append(1 if location_update.is_active else 0)
+
+            if not updates:
+                return {"message": "No updates provided"}
+
+            updates.append("updated_at = datetime('now')")
+            params.append(location_id)
+
+            query = f"UPDATE locations SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, params)
+
+            return {"message": "Location updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating location: {e}")
+        raise HTTPException(status_code=500, detail="Error updating location")
+
+@app.delete("/locations/{location_id}")
+async def delete_location(location_id: int, current_user: User = Depends(get_admin_user)):
+    """Delete location"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("DELETE FROM locations WHERE id = ?", (location_id,))
+            if cursor.rowcount > 0:
+                return {"message": "Location deleted successfully"}
+            raise HTTPException(status_code=404, detail="Location not found")
+    except Exception as e:
+        logging.error(f"Error deleting location: {e}")
+        raise HTTPException(status_code=500, detail="Error deleting location")
+
+@app.get("/locations/{location_id}/items")
+async def get_location_items(location_id: int, current_user: User = Depends(get_current_user)):
+    """Get all items in a specific location"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT il.*, i.quantity as total_quantity, i.group_name, i.custom_fields
+                FROM item_locations il
+                LEFT JOIN items i ON il.item_name = i.item_name
+                WHERE il.location_id = ?
+                ORDER BY il.item_name
+            """, (location_id,))
+
+            items = []
+            for row in cursor.fetchall():
+                items.append({
+                    "id": row['id'],
+                    "item_name": row['item_name'],
+                    "quantity": row['quantity'],
+                    "total_quantity": row['total_quantity'],
+                    "aisle": row['aisle'],
+                    "shelf": row['shelf'],
+                    "bin": row['bin'],
+                    "notes": row['notes'],
+                    "last_counted": row['last_counted'],
+                    "group_name": row['group_name']
+                })
+            return {"items": items, "total_items": len(items)}
+    except Exception as e:
+        logging.error(f"Error fetching location items: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching location items")
+
+# ============================================================================
+# ITEM LOCATIONS ENDPOINTS
+# ============================================================================
+
+@app.post("/item-locations")
+async def assign_item_to_location(
+    item_location: ItemLocationCreate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Assign item to location with quantity"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Check if item and location exist
+            cursor.execute("SELECT 1 FROM items WHERE item_name = ?", (item_location.item_name,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Item not found")
+
+            cursor.execute("SELECT 1 FROM locations WHERE id = ?", (item_location.location_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Location not found")
+
+            cursor.execute("""
+                INSERT INTO item_locations (item_name, location_id, quantity, aisle, shelf, bin, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                item_location.item_name, item_location.location_id, item_location.quantity,
+                item_location.aisle, item_location.shelf, item_location.bin, item_location.notes
+            ))
+
+            return {"message": "Item assigned to location successfully"}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Item already assigned to this location")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error assigning item to location: {e}")
+        raise HTTPException(status_code=500, detail="Error assigning item to location")
+
+@app.get("/items/{item_name}/locations")
+async def get_item_locations(item_name: str, current_user: User = Depends(get_current_user)):
+    """Get all locations where an item is stored"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT il.*, l.name as location_name, l.location_type, l.city, l.state
+                FROM item_locations il
+                LEFT JOIN locations l ON il.location_id = l.id
+                WHERE il.item_name = ?
+                ORDER BY il.quantity DESC
+            """, (item_name,))
+
+            locations = []
+            total_qty = 0
+            for row in cursor.fetchall():
+                locations.append({
+                    "id": row['id'],
+                    "location_id": row['location_id'],
+                    "location_name": row['location_name'],
+                    "location_type": row['location_type'],
+                    "city": row['city'],
+                    "state": row['state'],
+                    "quantity": row['quantity'],
+                    "aisle": row['aisle'],
+                    "shelf": row['shelf'],
+                    "bin": row['bin'],
+                    "notes": row['notes'],
+                    "last_counted": row['last_counted']
+                })
+                total_qty += row['quantity']
+
+            return {"locations": locations, "total_locations": len(locations), "total_quantity": total_qty}
+    except Exception as e:
+        logging.error(f"Error fetching item locations: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching item locations")
+
+# ============================================================================
+# BATCHES MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.get("/batches")
+async def get_all_batches(
+    status: Optional[str] = None,
+    expiring_soon: bool = False,
+    current_user: User = Depends(get_current_user)
+):
+    """Get all batches with optional filters"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            if expiring_soon:
+                # Get batches expiring in next 30 days
+                query = """
+                    SELECT b.*, l.name as location_name, s.name as supplier_name
+                    FROM batches b
+                    LEFT JOIN locations l ON b.location_id = l.id
+                    LEFT JOIN suppliers s ON b.supplier_id = s.id
+                    WHERE b.expiry_date IS NOT NULL
+                    AND b.expiry_date <= date('now', '+30 days')
+                    AND b.status = 'active'
+                    ORDER BY b.expiry_date ASC
+                """
+                cursor.execute(query)
+            elif status:
+                query = """
+                    SELECT b.*, l.name as location_name, s.name as supplier_name
+                    FROM batches b
+                    LEFT JOIN locations l ON b.location_id = l.id
+                    LEFT JOIN suppliers s ON b.supplier_id = s.id
+                    WHERE b.status = ?
+                    ORDER BY b.created_at DESC
+                """
+                cursor.execute(query, (status,))
+            else:
+                query = """
+                    SELECT b.*, l.name as location_name, s.name as supplier_name
+                    FROM batches b
+                    LEFT JOIN locations l ON b.location_id = l.id
+                    LEFT JOIN suppliers s ON b.supplier_id = s.id
+                    ORDER BY b.created_at DESC
+                """
+                cursor.execute(query)
+
+            batches = []
+            for row in cursor.fetchall():
+                batches.append({
+                    "id": row['id'],
+                    "batch_number": row['batch_number'],
+                    "item_name": row['item_name'],
+                    "location_id": row['location_id'],
+                    "location_name": row['location_name'],
+                    "quantity": row['quantity'],
+                    "manufacturing_date": row['manufacturing_date'],
+                    "expiry_date": row['expiry_date'],
+                    "received_date": row['received_date'],
+                    "supplier_id": row['supplier_id'],
+                    "supplier_name": row['supplier_name'],
+                    "cost_per_unit": row['cost_per_unit'],
+                    "status": row['status'],
+                    "notes": row['notes'],
+                    "created_at": row['created_at'],
+                    "updated_at": row['updated_at']
+                })
+            return {"batches": batches, "total": len(batches)}
+    except Exception as e:
+        logging.error(f"Error fetching batches: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching batches")
+
+@app.post("/batches")
+async def create_batch(
+    batch: BatchCreate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Create new batch"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO batches (
+                    batch_number, item_name, location_id, quantity, manufacturing_date,
+                    expiry_date, received_date, supplier_id, cost_per_unit, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                batch.batch_number, batch.item_name, batch.location_id, batch.quantity,
+                batch.manufacturing_date, batch.expiry_date, batch.received_date,
+                batch.supplier_id, batch.cost_per_unit, batch.status, batch.notes
+            ))
+            batch_id = cursor.lastrowid
+
+            # Check for expiry and create alert if needed
+            if batch.expiry_date:
+                from datetime import datetime as dt
+                expiry = dt.strptime(batch.expiry_date, "%Y-%m-%d").date()
+                today = dt.now().date()
+                days_until_expiry = (expiry - today).days
+
+                if days_until_expiry <= 30 and days_until_expiry > 0:
+                    severity = 'critical' if days_until_expiry <= 7 else 'high' if days_until_expiry <= 14 else 'medium'
+                    cursor.execute("""
+                        INSERT INTO alerts (alert_type, severity, item_name, batch_id, message)
+                        VALUES ('expiring_soon', ?, ?, ?, ?)
+                    """, (
+                        severity, batch.item_name, batch_id,
+                        f"Batch {batch.batch_number} expires in {days_until_expiry} days"
+                    ))
+
+            return {"message": "Batch created successfully", "id": batch_id}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Batch number already exists")
+    except Exception as e:
+        logging.error(f"Error creating batch: {e}")
+        raise HTTPException(status_code=500, detail="Error creating batch")
+
+@app.put("/batches/{batch_id}")
+async def update_batch(
+    batch_id: int,
+    batch_update: BatchUpdate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Update batch"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM batches WHERE id = ?", (batch_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Batch not found")
+
+            updates = []
+            params = []
+
+            if batch_update.quantity is not None:
+                updates.append("quantity = ?")
+                params.append(batch_update.quantity)
+            if batch_update.location_id is not None:
+                updates.append("location_id = ?")
+                params.append(batch_update.location_id)
+            if batch_update.status is not None:
+                updates.append("status = ?")
+                params.append(batch_update.status)
+            if batch_update.notes is not None:
+                updates.append("notes = ?")
+                params.append(batch_update.notes)
+
+            if not updates:
+                return {"message": "No updates provided"}
+
+            updates.append("updated_at = datetime('now')")
+            params.append(batch_id)
+
+            query = f"UPDATE batches SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, params)
+
+            return {"message": "Batch updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating batch: {e}")
+        raise HTTPException(status_code=500, detail="Error updating batch")
+
+@app.get("/items/{item_name}/batches")
+async def get_item_batches(
+    item_name: str,
+    active_only: bool = True,
+    current_user: User = Depends(get_current_user)
+):
+    """Get all batches for a specific item"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            if active_only:
+                query = """
+                    SELECT b.*, l.name as location_name, s.name as supplier_name
+                    FROM batches b
+                    LEFT JOIN locations l ON b.location_id = l.id
+                    LEFT JOIN suppliers s ON b.supplier_id = s.id
+                    WHERE b.item_name = ? AND b.status = 'active'
+                    ORDER BY b.expiry_date ASC NULLS LAST
+                """
+            else:
+                query = """
+                    SELECT b.*, l.name as location_name, s.name as supplier_name
+                    FROM batches b
+                    LEFT JOIN locations l ON b.location_id = l.id
+                    LEFT JOIN suppliers s ON b.supplier_id = s.id
+                    WHERE b.item_name = ?
+                    ORDER BY b.created_at DESC
+                """
+
+            cursor.execute(query, (item_name,))
+
+            batches = []
+            for row in cursor.fetchall():
+                batches.append({
+                    "id": row['id'],
+                    "batch_number": row['batch_number'],
+                    "location_id": row['location_id'],
+                    "location_name": row['location_name'],
+                    "quantity": row['quantity'],
+                    "manufacturing_date": row['manufacturing_date'],
+                    "expiry_date": row['expiry_date'],
+                    "received_date": row['received_date'],
+                    "supplier_id": row['supplier_id'],
+                    "supplier_name": row['supplier_name'],
+                    "cost_per_unit": row['cost_per_unit'],
+                    "status": row['status'],
+                    "notes": row['notes']
+                })
+
+            return {"batches": batches, "total": len(batches)}
+    except Exception as e:
+        logging.error(f"Error fetching item batches: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching item batches")
+
+# ============================================================================
+# STOCK ADJUSTMENTS ENDPOINTS
+# ============================================================================
+
+@app.get("/stock-adjustments")
+async def get_stock_adjustments(
+    item_name: Optional[str] = None,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user)
+):
+    """Get stock adjustments with optional filters"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            if item_name:
+                query = """
+                    SELECT sa.*, l.name as location_name, b.batch_number
+                    FROM stock_adjustments sa
+                    LEFT JOIN locations l ON sa.location_id = l.id
+                    LEFT JOIN batches b ON sa.batch_id = b.id
+                    WHERE sa.item_name = ?
+                    ORDER BY sa.adjustment_date DESC
+                    LIMIT ?
+                """
+                cursor.execute(query, (item_name, limit))
+            else:
+                query = """
+                    SELECT sa.*, l.name as location_name, b.batch_number
+                    FROM stock_adjustments sa
+                    LEFT JOIN locations l ON sa.location_id = l.id
+                    LEFT JOIN batches b ON sa.batch_id = b.id
+                    ORDER BY sa.adjustment_date DESC
+                    LIMIT ?
+                """
+                cursor.execute(query, (limit,))
+
+            adjustments = []
+            for row in cursor.fetchall():
+                adjustments.append({
+                    "id": row['id'],
+                    "item_name": row['item_name'],
+                    "location_id": row['location_id'],
+                    "location_name": row['location_name'],
+                    "batch_id": row['batch_id'],
+                    "batch_number": row['batch_number'],
+                    "adjustment_type": row['adjustment_type'],
+                    "quantity": row['quantity'],
+                    "reason": row['reason'],
+                    "reason_notes": row['reason_notes'],
+                    "adjusted_by": row['adjusted_by'],
+                    "approved_by": row['approved_by'],
+                    "reference_number": row['reference_number'],
+                    "adjustment_date": row['adjustment_date'],
+                    "created_at": row['created_at']
+                })
+
+            return {"adjustments": adjustments, "total": len(adjustments)}
+    except Exception as e:
+        logging.error(f"Error fetching stock adjustments: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching stock adjustments")
+
+@app.post("/stock-adjustments")
+async def create_stock_adjustment(
+    adjustment: StockAdjustmentCreate,
+    current_user: User = Depends(get_editor_user)
+):
+    """Create stock adjustment and update inventory"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Insert adjustment record
+            cursor.execute("""
+                INSERT INTO stock_adjustments (
+                    item_name, location_id, batch_id, adjustment_type, quantity,
+                    reason, reason_notes, adjusted_by, approved_by, reference_number
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                adjustment.item_name, adjustment.location_id, adjustment.batch_id,
+                adjustment.adjustment_type, adjustment.quantity, adjustment.reason,
+                adjustment.reason_notes, adjustment.adjusted_by, adjustment.approved_by,
+                adjustment.reference_number
+            ))
+
+            # Update item quantity in main items table
+            if adjustment.adjustment_type == "increase":
+                cursor.execute("""
+                    UPDATE items SET quantity = quantity + ? WHERE item_name = ?
+                """, (adjustment.quantity, adjustment.item_name))
+            else:  # decrease
+                cursor.execute("""
+                    UPDATE items SET quantity = quantity - ? WHERE item_name = ?
+                """, (adjustment.quantity, adjustment.item_name))
+
+            # Update location quantity if specified
+            if adjustment.location_id:
+                if adjustment.adjustment_type == "increase":
+                    cursor.execute("""
+                        UPDATE item_locations
+                        SET quantity = quantity + ?, updated_at = datetime('now')
+                        WHERE item_name = ? AND location_id = ?
+                    """, (adjustment.quantity, adjustment.item_name, adjustment.location_id))
+                else:
+                    cursor.execute("""
+                        UPDATE item_locations
+                        SET quantity = quantity - ?, updated_at = datetime('now')
+                        WHERE item_name = ? AND location_id = ?
+                    """, (adjustment.quantity, adjustment.item_name, adjustment.location_id))
+
+            # Update batch quantity if specified
+            if adjustment.batch_id:
+                if adjustment.adjustment_type == "increase":
+                    cursor.execute("""
+                        UPDATE batches
+                        SET quantity = quantity + ?, updated_at = datetime('now')
+                        WHERE id = ?
+                    """, (adjustment.quantity, adjustment.batch_id))
+                else:
+                    cursor.execute("""
+                        UPDATE batches
+                        SET quantity = quantity - ?, updated_at = datetime('now')
+                        WHERE id = ?
+                    """, (adjustment.quantity, adjustment.batch_id))
+
+            return {"message": "Stock adjustment created successfully"}
+    except Exception as e:
+        logging.error(f"Error creating stock adjustment: {e}")
+        raise HTTPException(status_code=500, detail="Error creating stock adjustment")
+
+# ============================================================================
+# ALERTS AND NOTIFICATIONS ENDPOINTS
+# ============================================================================
+
+@app.get("/alerts")
+async def get_alerts(
+    unread_only: bool = False,
+    alert_type: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get alerts/notifications"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            conditions = []
+            params = []
+
+            if unread_only:
+                conditions.append("is_read = 0")
+
+            if alert_type:
+                conditions.append("alert_type = ?")
+                params.append(alert_type)
+
+            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+            query = f"""
+                SELECT * FROM alerts
+                {where_clause}
+                ORDER BY
+                    CASE severity
+                        WHEN 'critical' THEN 1
+                        WHEN 'high' THEN 2
+                        WHEN 'medium' THEN 3
+                        WHEN 'low' THEN 4
+                    END,
+                    created_at DESC
+            """
+
+            cursor.execute(query, params)
+
+            alerts = []
+            for row in cursor.fetchall():
+                alerts.append({
+                    "id": row['id'],
+                    "alert_type": row['alert_type'],
+                    "severity": row['severity'],
+                    "item_name": row['item_name'],
+                    "location_id": row['location_id'],
+                    "batch_id": row['batch_id'],
+                    "message": row['message'],
+                    "is_read": bool(row['is_read']),
+                    "is_resolved": bool(row['is_resolved']),
+                    "resolved_by": row['resolved_by'],
+                    "resolved_at": row['resolved_at'],
+                    "created_at": row['created_at']
+                })
+
+            return {"alerts": alerts, "total": len(alerts)}
+    except Exception as e:
+        logging.error(f"Error fetching alerts: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching alerts")
+
+@app.put("/alerts/{alert_id}")
+async def update_alert(
+    alert_id: int,
+    alert_update: AlertUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Mark alert as read or resolved"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            updates = []
+            params = []
+
+            if alert_update.is_read is not None:
+                updates.append("is_read = ?")
+                params.append(1 if alert_update.is_read else 0)
+
+            if alert_update.is_resolved is not None:
+                updates.append("is_resolved = ?")
+                params.append(1 if alert_update.is_resolved else 0)
+                if alert_update.is_resolved:
+                    updates.append("resolved_at = datetime('now')")
+                    if alert_update.resolved_by:
+                        updates.append("resolved_by = ?")
+                        params.append(alert_update.resolved_by)
+
+            if not updates:
+                return {"message": "No updates provided"}
+
+            params.append(alert_id)
+            query = f"UPDATE alerts SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, params)
+
+            return {"message": "Alert updated successfully"}
+    except Exception as e:
+        logging.error(f"Error updating alert: {e}")
+        raise HTTPException(status_code=500, detail="Error updating alert")
+
+@app.post("/alerts/check-reorder-levels")
+async def check_reorder_levels(current_user: User = Depends(get_current_user)):
+    """Check all items and create alerts for low stock"""
+    try:
+        with db_connection.get_cursor() as cursor:
+            # Find items below reorder level
+            cursor.execute("""
+                SELECT item_name, quantity, reorder_level, reorder_quantity
+                FROM items
+                WHERE quantity <= reorder_level AND reorder_level IS NOT NULL
+            """)
+
+            alerts_created = 0
+            for row in cursor.fetchall():
+                # Check if alert already exists and is unresolved
+                cursor.execute("""
+                    SELECT id FROM alerts
+                    WHERE item_name = ? AND alert_type = 'reorder' AND is_resolved = 0
+                """, (row['item_name'],))
+
+                if not cursor.fetchone():
+                    severity = 'critical' if row['quantity'] == 0 else 'high' if row['quantity'] < row['reorder_level'] / 2 else 'medium'
+                    cursor.execute("""
+                        INSERT INTO alerts (alert_type, severity, item_name, message)
+                        VALUES ('reorder', ?, ?, ?)
+                    """, (
+                        severity,
+                        row['item_name'],
+                        f"Item {row['item_name']} is at {row['quantity']} units (reorder level: {row['reorder_level']})"
+                    ))
+                    alerts_created += 1
+
+            return {"message": f"Created {alerts_created} reorder alerts"}
+    except Exception as e:
+        logging.error(f"Error checking reorder levels: {e}")
+        raise HTTPException(status_code=500, detail="Error checking reorder levels")
 
 # ============================================================================
 # Reports Endpoints

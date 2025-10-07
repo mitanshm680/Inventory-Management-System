@@ -15,6 +15,10 @@ import Users from './pages/Users';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import Groups from './pages/Groups';
+import Suppliers from './pages/Suppliers';
+import Locations from './pages/Locations';
+import Batches from './pages/Batches';
+import StockAdjustments from './pages/StockAdjustments';
 
 // Hooks
 import { useAuth } from './contexts/AuthContext';
@@ -109,6 +113,46 @@ const App: React.FC = () => {
             <ProtectedRoute requiredRoles={['admin', 'editor']}>
               <MainLayout>
                 <Groups />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/suppliers"
+          element={
+            <ProtectedRoute>
+              <MainLayout>
+                <Suppliers />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/locations"
+          element={
+            <ProtectedRoute requiredRoles={['admin', 'editor']}>
+              <MainLayout>
+                <Locations />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/batches"
+          element={
+            <ProtectedRoute>
+              <MainLayout>
+                <Batches />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/stock-adjustments"
+          element={
+            <ProtectedRoute requiredRoles={['admin', 'editor']}>
+              <MainLayout>
+                <StockAdjustments />
               </MainLayout>
             </ProtectedRoute>
           }

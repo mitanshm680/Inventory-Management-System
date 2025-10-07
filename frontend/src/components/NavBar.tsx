@@ -28,8 +28,13 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import CategoryIcon from '@mui/icons-material/Category';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
+import LocalShippingIcon from '@mui/icons-material/LocalShipping';
+import WarehouseIcon from '@mui/icons-material/Warehouse';
+import QrCodeIcon from '@mui/icons-material/QrCode';
+import HistoryIcon from '@mui/icons-material/History';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
+import AlertsPanel from './AlertsPanel';
 
 interface MenuItem {
   text: string;
@@ -64,6 +69,10 @@ const NavBar: React.FC = () => {
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/', requiredRole: 'viewer' },
     { text: 'Inventory', icon: <InventoryIcon />, path: '/inventory', requiredRole: 'viewer' },
     { text: 'Groups', icon: <CategoryIcon />, path: '/groups', requiredRole: 'editor' },
+    { text: 'Suppliers', icon: <LocalShippingIcon />, path: '/suppliers', requiredRole: 'viewer' },
+    { text: 'Locations', icon: <WarehouseIcon />, path: '/locations', requiredRole: 'editor' },
+    { text: 'Batches', icon: <QrCodeIcon />, path: '/batches', requiredRole: 'viewer' },
+    { text: 'Stock Adjustments', icon: <HistoryIcon />, path: '/stock-adjustments', requiredRole: 'editor' },
     { text: 'Price Management', icon: <PriceChangeIcon />, path: '/prices', requiredRole: 'viewer' },
     { text: 'Reports', icon: <AssessmentIcon />, path: '/reports', requiredRole: 'viewer' },
     { text: 'User Management', icon: <GroupIcon />, path: '/users', requiredRole: 'admin' },
@@ -161,6 +170,7 @@ const NavBar: React.FC = () => {
           
           {!isMobile && (
             <>
+              <AlertsPanel />
               <Tooltip title={mode === 'dark' ? 'Light Mode' : 'Dark Mode'}>
                 <IconButton color="inherit" onClick={toggleColorMode} sx={{ ml: 1 }}>
                   {mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
