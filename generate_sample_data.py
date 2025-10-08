@@ -31,10 +31,7 @@ SUPPLIER_DATA = [
 ]
 
 LOCATIONS_DATA = [
-    ('Main Warehouse', '1000 Storage Way', 'Los Angeles', 'CA', '90001', 'warehouse', 10000),
-    ('Downtown Office', '200 Business St', 'New York', 'NY', '10002', 'store', 2000),
-    ('Distribution Center', '500 Logistics Pkwy', 'Dallas', 'TX', '75201', 'distribution', 15000),
-    ('West Coast Hub', '300 Pacific Ave', 'Seattle', 'WA', '98102', 'warehouse', 8000)
+    # No hardcoded locations - users should create their own
 ]
 
 ADJUSTMENT_REASONS = ['damaged', 'found', 'correction', 'expired', 'returned', 'stolen', 'lost']
@@ -103,18 +100,20 @@ def generate_sample_data():
         # Delete existing locations
         cursor.execute("DELETE FROM locations")
         location_ids = []
-        for loc in LOCATIONS_DATA:
-            name, address, city, state, zip_code, loc_type, capacity = loc
-            cursor.execute("""
-                INSERT INTO locations (
-                    name, address, city, state, zip_code, country,
-                    location_type, capacity, current_utilization,
-                    manager_name, is_active
-                )
-                VALUES (?, ?, ?, ?, ?, 'USA', ?, ?, ?, ?, 1)
-            """, (name, address, city, state, zip_code, loc_type, capacity, 0, f'Manager {name.split()[0]}'))
-            location_ids.append(cursor.lastrowid)
-        print(f"   Created {len(LOCATIONS_DATA)} locations")
+        # No hardcoded locations - users should create their own
+        if len(LOCATIONS_DATA) > 0:
+            for loc in LOCATIONS_DATA:
+                name, address, city, state, zip_code, loc_type, capacity = loc
+                cursor.execute("""
+                    INSERT INTO locations (
+                        name, address, city, state, zip_code, country,
+                        location_type, capacity, current_utilization,
+                        manager_name, is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'USA', ?, ?, ?, ?, 1)
+                """, (name, address, city, state, zip_code, loc_type, capacity, 0, f'Manager {name.split()[0]}'))
+                location_ids.append(cursor.lastrowid)
+        print(f"   Skipped creating hardcoded locations - users should create their own")
 
         # 4. Create items
         print("\n[4/9] Creating items...")
@@ -180,39 +179,42 @@ def generate_sample_data():
         # 7. Create batches
         print("\n[7/9] Creating batches...")
         batch_count = 0
-        for item_name in ITEM_NAMES[:15]:  # Create batches for half the items
-            # 1-3 batches per item
-            for i in range(random.randint(1, 3)):
-                batch_number = f"BATCH-{item_name[:10].upper()}-{random.randint(1000, 9999)}"
-                quantity = random.randint(50, 200)
-                location_id = random.choice(location_ids)
-                supplier_id = random.choice(supplier_ids)
+        # Skip batches if no locations exist
+        if len(location_ids) > 0:
+            for item_name in ITEM_NAMES[:15]:  # Create batches for half the items
+                # 1-3 batches per item
+                for i in range(random.randint(1, 3)):
+                    batch_number = f"BATCH-{item_name[:10].upper()}-{random.randint(1000, 9999)}"
+                    quantity = random.randint(50, 200)
+                    location_id = random.choice(location_ids)
+                    supplier_id = random.choice(supplier_ids)
 
-                mfg_date = get_random_date(90)
-                exp_date = get_future_date(180)
-                received_date = get_random_date(60)
-                cost = random.uniform(5, 500)
+                    mfg_date = get_random_date(90)
+                    exp_date = get_future_date(180)
+                    received_date = get_random_date(60)
+                    cost = random.uniform(5, 500)
 
-                cursor.execute("""
-                    INSERT INTO batches (
-                        batch_number, item_name, location_id, quantity,
-                        manufacturing_date, expiry_date, received_date,
-                        supplier_id, cost_per_unit, status
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-                """, (batch_number, item_name, location_id, quantity, mfg_date, exp_date, received_date, supplier_id, round(cost, 2)))
-                batch_count += 1
-        print(f"   Created {batch_count} batches")
+                    cursor.execute("""
+                        INSERT INTO batches (
+                            batch_number, item_name, location_id, quantity,
+                            manufacturing_date, expiry_date, received_date,
+                            supplier_id, cost_per_unit, status
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                    """, (batch_number, item_name, location_id, quantity, mfg_date, exp_date, received_date, supplier_id, round(cost, 2)))
+                    batch_count += 1
+        print(f"   Skipped batches - no locations available (users should create locations first)")
 
         # 8. Create stock adjustments
         print("\n[8/9] Creating stock adjustments...")
         adjustment_count = 0
+        # Only create adjustments without location requirements
         for _ in range(50):  # Create 50 adjustments
             item_name = random.choice(ITEM_NAMES)
             adj_type = random.choice(['increase', 'decrease'])
             quantity = random.randint(1, 50)
             reason = random.choice(ADJUSTMENT_REASONS)
-            location_id = random.choice(location_ids) if random.random() > 0.5 else None
+            location_id = random.choice(location_ids) if len(location_ids) > 0 and random.random() > 0.5 else None
 
             cursor.execute("""
                 INSERT INTO stock_adjustments (
@@ -283,35 +285,37 @@ def generate_sample_data():
         # 11. Create supplier-location relationships (NEW)
         print("\n[11/12] Creating supplier-location relationships...")
         sl_count = 0
-        # Each supplier can deliver to 2-4 locations with different costs
-        for supplier_id in supplier_ids:
-            num_locations = random.randint(2, len(location_ids))
-            selected_locations = random.sample(location_ids, num_locations)
+        # Skip supplier-location relationships if no locations exist
+        if len(location_ids) > 0:
+            # Each supplier can deliver to 2-4 locations with different costs
+            for supplier_id in supplier_ids:
+                num_locations = random.randint(2, len(location_ids))
+                selected_locations = random.sample(location_ids, num_locations)
 
-            for location_id in selected_locations:
-                distance = random.uniform(10, 800)
-                # Shipping cost increases with distance
-                shipping_cost = round(5 + (distance * 0.05), 2)
-                # Delivery days based on distance
-                delivery_days = 1 if distance < 100 else (2 if distance < 300 else random.randint(3, 7))
+                for location_id in selected_locations:
+                    distance = random.uniform(10, 800)
+                    # Shipping cost increases with distance
+                    shipping_cost = round(5 + (distance * 0.05), 2)
+                    # Delivery days based on distance
+                    delivery_days = 1 if distance < 100 else (2 if distance < 300 else random.randint(3, 7))
 
-                cursor.execute("""
-                    INSERT OR IGNORE INTO supplier_locations (
-                        supplier_id, location_id, distance_km, estimated_delivery_days,
-                        shipping_cost, is_preferred, notes
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    supplier_id,
-                    location_id,
-                    round(distance, 1),
-                    delivery_days,
-                    shipping_cost,
-                    1 if distance < 150 else 0,  # Prefer closer suppliers
-                    f"Free shipping for orders over $500" if distance < 150 else None
-                ))
-                sl_count += 1
-        print(f"   Created {sl_count} supplier-location relationships")
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO supplier_locations (
+                            supplier_id, location_id, distance_km, estimated_delivery_days,
+                            shipping_cost, is_preferred, notes
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        supplier_id,
+                        location_id,
+                        round(distance, 1),
+                        delivery_days,
+                        shipping_cost,
+                        1 if distance < 150 else 0,  # Prefer closer suppliers
+                        f"Free shipping for orders over $500" if distance < 150 else None
+                    ))
+                    sl_count += 1
+        print(f"   Skipped supplier-location relationships - no locations available (users should create locations first)")
 
         # 12. Create activity history
         print("\n[12/12] Creating activity history...")

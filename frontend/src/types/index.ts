@@ -17,7 +17,10 @@ export interface InventoryItem {
   reorder_point?: number;
   created_at: string;
   updated_at?: string;
-  
+  location_id?: number;
+  location_name?: string;
+  group_name?: string;
+
   // Maintain compatibility with frontend display fields
   sku?: string;
   name?: string;

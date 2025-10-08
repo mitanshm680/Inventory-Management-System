@@ -38,6 +38,7 @@ import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import MapIcon from '@mui/icons-material/Map';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { useAppMode } from '../contexts/AppModeContext';
 import AlertsPanel from './AlertsPanel';
 import GlobalSearch from './GlobalSearch';
 
@@ -46,6 +47,7 @@ interface MenuItem {
   icon: React.ReactNode;
   path: string;
   requiredRole: 'admin' | 'editor' | 'viewer';
+  advancedOnly?: boolean;
 }
 
 const NavBar: React.FC = () => {
@@ -53,6 +55,7 @@ const NavBar: React.FC = () => {
   const location = useLocation();
   const { user, logout } = useAuth();
   const { toggleColorMode, mode } = useTheme();
+  const { isSimpleMode } = useAppMode();
   const muiTheme = useMuiTheme();
   const isMobile = useMediaQuery(muiTheme.breakpoints.down('md'));
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -88,16 +91,14 @@ const NavBar: React.FC = () => {
   const menuItems: MenuItem[] = [
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/', requiredRole: 'viewer' },
     { text: 'Inventory', icon: <InventoryIcon />, path: '/inventory', requiredRole: 'viewer' },
-    { text: 'Groups', icon: <CategoryIcon />, path: '/groups', requiredRole: 'editor' },
     { text: 'Suppliers', icon: <LocalShippingIcon />, path: '/suppliers', requiredRole: 'viewer' },
-    { text: 'Locations', icon: <WarehouseIcon />, path: '/locations', requiredRole: 'editor' },
-    { text: 'Supplier Products', icon: <CompareArrowsIcon />, path: '/supplier-products', requiredRole: 'viewer' },
-    { text: 'Supplier Locations', icon: <MapIcon />, path: '/supplier-locations', requiredRole: 'viewer' },
-    { text: 'Batches', icon: <QrCodeIcon />, path: '/batches', requiredRole: 'viewer' },
+    { text: 'Locations', icon: <WarehouseIcon />, path: '/locations', requiredRole: 'editor', advancedOnly: true },
+    { text: 'Batches', icon: <QrCodeIcon />, path: '/batches', requiredRole: 'viewer', advancedOnly: true },
     { text: 'Stock Adjustments', icon: <HistoryIcon />, path: '/stock-adjustments', requiredRole: 'editor' },
-    { text: 'Price Management', icon: <PriceChangeIcon />, path: '/prices', requiredRole: 'viewer' },
+    { text: 'Price Management', icon: <PriceChangeIcon />, path: '/prices', requiredRole: 'viewer', advancedOnly: true },
     { text: 'Reports', icon: <AssessmentIcon />, path: '/reports', requiredRole: 'viewer' },
-    { text: 'User Management', icon: <GroupIcon />, path: '/users', requiredRole: 'admin' },
+    { text: 'Groups', icon: <CategoryIcon />, path: '/groups', requiredRole: 'editor', advancedOnly: true },
+    { text: 'User Management', icon: <GroupIcon />, path: '/users', requiredRole: 'admin', advancedOnly: true },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings', requiredRole: 'admin' },
   ];
 
@@ -124,11 +125,19 @@ const NavBar: React.FC = () => {
       <Divider />
       <List>
         {menuItems
-          .filter(item => !item.requiredRole || (user && (
-            user.role === 'admin' || 
-            (user.role === 'editor' && item.requiredRole !== 'admin') || 
-            (user.role === 'viewer' && item.requiredRole === 'viewer')
-          )))
+          .filter(item => {
+            // Filter by role permission
+            const hasRole = !item.requiredRole || (user && (
+              user.role === 'admin' ||
+              (user.role === 'editor' && item.requiredRole !== 'admin') ||
+              (user.role === 'viewer' && item.requiredRole === 'viewer')
+            ));
+
+            // Filter by app mode (hide advanced features in simple mode)
+            const isVisibleInMode = !item.advancedOnly || !isSimpleMode;
+
+            return hasRole && isVisibleInMode;
+          })
           .map((item) => (
             <ListItem 
               button 

@@ -35,11 +35,14 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LockIcon from '@mui/icons-material/Lock';
 import BuildIcon from '@mui/icons-material/Build';
 import DownloadIcon from '@mui/icons-material/Download';
+import TuneIcon from '@mui/icons-material/Tune';
 import { useAuth } from '../contexts/AuthContext';
+import { useAppMode } from '../contexts/AppModeContext';
 import { apiService } from '../services/api';
 
 const Settings: React.FC = () => {
   const { user } = useAuth();
+  const { mode, isSimpleMode, toggleMode } = useAppMode();
   const [darkMode, setDarkMode] = useState(localStorage.getItem('darkMode') === 'true');
   const [loading, setLoading] = useState(false);
   const [backupInProgress, setBackupInProgress] = useState(false);
@@ -230,11 +233,48 @@ const Settings: React.FC = () => {
               </Card>
             </Grid>
             
-            {/* Advanced Settings */}
-            <Grid item xs={12}>
+            {/* App Mode Settings */}
+            <Grid item xs={12} md={6}>
               <Card elevation={2}>
-                <CardHeader 
-                  title="System Configuration" 
+                <CardHeader
+                  title="App Mode"
+                  avatar={
+                    <TuneIcon color="primary" />
+                  }
+                />
+                <Divider />
+                <CardContent>
+                  <Typography variant="body2" paragraph>
+                    Choose between Simple mode (essential features only) or Advanced mode (all features).
+                  </Typography>
+                  <List disablePadding>
+                    <ListItem>
+                      <ListItemIcon>
+                        <TuneIcon />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={`${mode === 'simple' ? 'Simple' : 'Advanced'} Mode`}
+                        secondary={isSimpleMode
+                          ? "Showing essential features only"
+                          : "Showing all advanced features"
+                        }
+                      />
+                      <Switch
+                        edge="end"
+                        checked={!isSimpleMode}
+                        onChange={toggleMode}
+                      />
+                    </ListItem>
+                  </List>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Advanced Settings */}
+            <Grid item xs={12} md={6}>
+              <Card elevation={2}>
+                <CardHeader
+                  title="System Configuration"
                   avatar={
                     <BuildIcon color="primary" />
                   }
@@ -246,9 +286,9 @@ const Settings: React.FC = () => {
                       <ListItemIcon>
                         <DarkModeIcon />
                       </ListItemIcon>
-                      <ListItemText 
-                        primary="Dark Mode" 
-                        secondary="Toggle between light and dark theme" 
+                      <ListItemText
+                        primary="Dark Mode"
+                        secondary="Toggle between light and dark theme"
                       />
                       <Switch
                         edge="end"
@@ -261,9 +301,9 @@ const Settings: React.FC = () => {
                       <ListItemIcon>
                         <SettingsIcon />
                       </ListItemIcon>
-                      <ListItemText 
-                        primary="System Version" 
-                        secondary="v1.0.0" 
+                      <ListItemText
+                        primary="System Version"
+                        secondary="v1.0.0"
                       />
                     </ListItem>
                   </List>
@@ -281,8 +321,26 @@ const Settings: React.FC = () => {
             <Typography variant="body1" sx={{ mb: 2 }}>
               You are logged in as: <strong>{user?.username}</strong> ({user?.role})
             </Typography>
-            
+
             <List>
+              <ListItem>
+                <ListItemIcon>
+                  <TuneIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary={`${mode === 'simple' ? 'Simple' : 'Advanced'} Mode`}
+                  secondary={isSimpleMode
+                    ? "Showing essential features only"
+                    : "Showing all advanced features"
+                  }
+                />
+                <Switch
+                  edge="end"
+                  checked={!isSimpleMode}
+                  onChange={toggleMode}
+                />
+              </ListItem>
+              <Divider />
               <ListItem>
                 <ListItemIcon>
                   <DarkModeIcon />

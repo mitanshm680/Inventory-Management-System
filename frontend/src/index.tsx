@@ -5,6 +5,7 @@ import App from './App';
 import reportWebVitals from './reportWebVitals';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { AppModeProvider } from './contexts/AppModeContext';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -14,7 +15,9 @@ root.render(
   <React.StrictMode>
     <AuthProvider>
       <ThemeProvider>
-        <App />
+        <AppModeProvider>
+          <App />
+        </AppModeProvider>
       </ThemeProvider>
     </AuthProvider>
   </React.StrictMode>

@@ -44,6 +44,8 @@ export interface InventoryItem {
     created_at?: string;
     updated_at?: string;
     custom_fields?: Record<string, any>;
+    location_id?: number;
+    location_name?: string;
 }
 
 export interface ChartData {

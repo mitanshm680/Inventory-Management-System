@@ -19,8 +19,7 @@ import Suppliers from './pages/Suppliers';
 import Locations from './pages/Locations';
 import Batches from './pages/Batches';
 import StockAdjustments from './pages/StockAdjustments';
-import SupplierProducts from './pages/SupplierProducts';
-import SupplierLocations from './pages/SupplierLocations';
+// Removed: SupplierProducts and SupplierLocations - now part of Suppliers page with tabs
 
 // Hooks
 import { useAuth } from './contexts/AuthContext';
@@ -159,26 +158,7 @@ const App: React.FC = () => {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="/supplier-products"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <SupplierProducts />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/supplier-locations"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <SupplierLocations />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
+        {/* Removed: /supplier-products and /supplier-locations routes - functionality moved to /suppliers tabs */}
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </BrowserRouter>
