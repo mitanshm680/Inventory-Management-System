@@ -136,6 +136,27 @@ const Reports: React.FC = () => {
     }
   };
 
+  const handleExportPDF = async () => {
+    try {
+      if (user?.role !== 'admin') {
+        alert('Only admins can export data');
+        return;
+      }
+      const blob = await apiService.exportToPDF();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `inventory_report_${new Date().toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting PDF:', err);
+      alert('Failed to export PDF');
+    }
+  };
+
   if (loading) {
     return (
       <Container>
@@ -155,17 +176,27 @@ const Reports: React.FC = () => {
             <Box sx={{ display: 'flex', gap: 2 }}>
               <Button
                 variant="outlined"
+                size="small"
                 startIcon={<DownloadIcon />}
                 onClick={handleExportCSV}
               >
-                Export CSV
+                CSV
               </Button>
               <Button
-                variant="contained"
+                variant="outlined"
+                size="small"
                 startIcon={<DownloadIcon />}
                 onClick={handleExportExcel}
               >
-                Export Excel
+                Excel
+              </Button>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={handleExportPDF}
+              >
+                PDF
               </Button>
             </Box>
           )}

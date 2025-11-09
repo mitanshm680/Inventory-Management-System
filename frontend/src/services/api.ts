@@ -285,6 +285,15 @@ export class ApiService {
         return response.data;
     }
 
+    async exportToPDF(groups?: string[]): Promise<Blob> {
+        const params = groups ? { groups: groups.join(',') } : {};
+        const response = await this.api.get('/export/pdf', {
+            params,
+            responseType: 'blob'
+        });
+        return response.data;
+    }
+
     // Locations
     async getLocations(activeOnly: boolean = false): Promise<any> {
         const params = activeOnly ? { active_only: true } : {};

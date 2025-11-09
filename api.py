@@ -2516,6 +2516,115 @@ async def export_inventory_excel(
         logging.error(f"Error exporting Excel: {e}")
         raise HTTPException(status_code=500, detail=f"Error exporting data: {str(e)}")
 
+@app.get("/export/pdf")
+async def export_inventory_pdf(
+    groups: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Export inventory to PDF file (admin only)"""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"inventory_report_{timestamp}.pdf"
+        group_list = groups.split(',') if groups else None
+
+        # Get inventory data
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        if group_list:
+            placeholders = ','.join('?' * len(group_list))
+            query = f"SELECT item_name, quantity, group_name, reorder_point, unit FROM items WHERE group_name IN ({placeholders})"
+            cursor.execute(query, group_list)
+        else:
+            cursor.execute("SELECT item_name, quantity, group_name, reorder_point, unit FROM items")
+
+        items = cursor.fetchall()
+        conn.close()
+
+        # Create PDF
+        doc = SimpleDocTemplate(filename, pagesize=letter)
+        elements = []
+        styles = getSampleStyleSheet()
+
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#1976d2'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        title = Paragraph("Inventory Management Report", title_style)
+        elements.append(title)
+
+        # Subtitle with date
+        subtitle_style = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Normal'],
+            fontSize=12,
+            textColor=colors.grey,
+            spaceAfter=20,
+            alignment=TA_CENTER
+        )
+        subtitle = Paragraph(f"Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", subtitle_style)
+        elements.append(subtitle)
+        elements.append(Spacer(1, 0.3*inch))
+
+        # Summary
+        summary_text = f"Total Items: <b>{len(items)}</b>"
+        summary = Paragraph(summary_text, styles['Normal'])
+        elements.append(summary)
+        elements.append(Spacer(1, 0.2*inch))
+
+        # Table data
+        data = [['Item Name', 'Quantity', 'Group', 'Reorder Level', 'Unit']]
+        for item in items:
+            data.append([
+                item[0] or '',
+                str(item[1]) if item[1] is not None else '0',
+                item[2] or 'N/A',
+                str(item[3]) if item[3] is not None else 'N/A',
+                item[4] or 'N/A'
+            ])
+
+        # Create table
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1976d2')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+
+        elements.append(table)
+        doc.build(elements)
+
+        return FileResponse(
+            filename,
+            media_type='application/pdf',
+            filename=filename
+        )
+    except Exception as e:
+        logging.error(f"Error exporting PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Error exporting PDF: {str(e)}")
+
 # ============================================================================
 # NOTES/COMMENTS ENDPOINTS
 # ============================================================================
