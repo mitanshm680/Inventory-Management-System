@@ -3936,6 +3936,349 @@ async def get_profit_margins(
         raise HTTPException(status_code=500, detail=f"Error calculating profit margins: {str(e)}")
 
 # ============================================================================
+# INVENTORY FORECASTING
+# ============================================================================
+
+@app.get("/forecasting/demand-prediction")
+async def predict_demand(
+    item_name: Optional[str] = None,
+    days_ahead: int = 30,
+    current_user: User = Depends(get_current_user)
+):
+    """Predict future demand based on historical stock movements"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build item filter
+        item_filter = ""
+        params = []
+        if item_name:
+            item_filter = "WHERE sa.item_name = ?"
+            params.append(item_name)
+
+        # Get historical stock movements (last 90 days)
+        cursor.execute(
+            f"""SELECT
+                   sa.item_name,
+                   i.group_name,
+                   DATE(sa.adjustment_date) as date,
+                   SUM(CASE WHEN sa.adjustment_type = 'decrease' THEN sa.quantity ELSE 0 END) as quantity_out,
+                   SUM(CASE WHEN sa.adjustment_type = 'increase' THEN sa.quantity ELSE 0 END) as quantity_in
+               FROM stock_adjustments sa
+               JOIN items i ON sa.item_name = i.item_name
+               {item_filter}
+               {'AND' if item_filter else 'WHERE'} sa.adjustment_date >= datetime('now', '-90 days')
+               GROUP BY sa.item_name, i.group_name, DATE(sa.adjustment_date)
+               ORDER BY sa.item_name, date""",
+            params
+        )
+
+        movements = cursor.fetchall()
+
+        # Calculate average daily consumption per item
+        item_stats = {}
+        for row in movements:
+            item = row['item_name']
+            if item not in item_stats:
+                item_stats[item] = {
+                    'item_name': item,
+                    'group_name': row['group_name'],
+                    'total_out': 0,
+                    'total_in': 0,
+                    'days_tracked': 0
+                }
+            item_stats[item]['total_out'] += row['quantity_out']
+            item_stats[item]['total_in'] += row['quantity_in']
+            item_stats[item]['days_tracked'] += 1
+
+        # Calculate predictions
+        predictions = []
+        for item, stats in item_stats.items():
+            avg_daily_consumption = stats['total_out'] / max(stats['days_tracked'], 1)
+            predicted_demand = avg_daily_consumption * days_ahead
+
+            # Get current stock
+            cursor.execute("SELECT quantity, reorder_level FROM items WHERE item_name = ?", (item,))
+            current = cursor.fetchone()
+            current_stock = current['quantity'] if current else 0
+            reorder_level = current['reorder_level'] if current and current['reorder_level'] else 0
+
+            # Calculate stock depletion date
+            days_until_depletion = (current_stock / avg_daily_consumption) if avg_daily_consumption > 0 else 999
+
+            # Determine urgency
+            if days_until_depletion < 7:
+                urgency = 'critical'
+            elif days_until_depletion < 14:
+                urgency = 'high'
+            elif days_until_depletion < 30:
+                urgency = 'medium'
+            else:
+                urgency = 'low'
+
+            predictions.append({
+                'item_name': item,
+                'group_name': stats['group_name'],
+                'current_stock': current_stock,
+                'avg_daily_consumption': round(avg_daily_consumption, 2),
+                'predicted_demand_next_30_days': round(predicted_demand, 2),
+                'days_until_depletion': round(days_until_depletion, 1) if days_until_depletion < 999 else None,
+                'reorder_level': reorder_level,
+                'should_reorder': current_stock <= reorder_level or days_until_depletion < 14,
+                'urgency': urgency,
+                'tracking_period_days': stats['days_tracked']
+            })
+
+        # Sort by urgency
+        urgency_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        predictions.sort(key=lambda x: urgency_order[x['urgency']])
+
+        conn.close()
+        return predictions
+
+    except Exception as e:
+        logging.error(f"Error predicting demand: {e}")
+        raise HTTPException(status_code=500, detail=f"Error predicting demand: {str(e)}")
+
+
+@app.get("/forecasting/reorder-recommendations")
+async def get_reorder_recommendations(
+    current_user: User = Depends(get_current_user)
+):
+    """Get items that should be reordered based on forecasting"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get all items with their current stock and reorder levels
+        cursor.execute("""
+            SELECT
+                i.item_name,
+                i.quantity as current_stock,
+                i.reorder_level,
+                i.group_name,
+                COALESCE(AVG(sp.unit_price), 0) as avg_unit_price,
+                COALESCE(AVG(sp.lead_time_days), 7) as avg_lead_time
+            FROM items i
+            LEFT JOIN supplier_products sp ON i.item_name = sp.item_name AND sp.is_available = 1
+            GROUP BY i.item_name, i.quantity, i.reorder_level, i.group_name
+        """)
+
+        items = cursor.fetchall()
+
+        recommendations = []
+        for item in items:
+            # Calculate historical consumption
+            cursor.execute("""
+                SELECT
+                    COALESCE(AVG(CASE WHEN adjustment_type = 'decrease' THEN quantity ELSE 0 END), 0) as avg_consumption
+                FROM stock_adjustments
+                WHERE item_name = ?
+                    AND adjustment_date >= datetime('now', '-30 days')
+            """, (item['item_name'],))
+
+            consumption_data = cursor.fetchone()
+            avg_daily_consumption = consumption_data['avg_consumption'] if consumption_data else 0
+
+            # Calculate recommended order quantity
+            # Safety stock = avg daily consumption * lead time * 1.5 (safety factor)
+            lead_time = item['avg_lead_time']
+            safety_stock = avg_daily_consumption * lead_time * 1.5
+
+            # Reorder quantity = (avg daily consumption * lead time) + safety stock - current stock
+            reorder_quantity = max(0, (avg_daily_consumption * lead_time) + safety_stock - item['current_stock'])
+
+            # Only recommend if below reorder level or will run out soon
+            days_until_stockout = (item['current_stock'] / avg_daily_consumption) if avg_daily_consumption > 0 else 999
+
+            if item['current_stock'] <= item['reorder_level'] or days_until_stockout < lead_time:
+                recommendations.append({
+                    'item_name': item['item_name'],
+                    'group_name': item['group_name'],
+                    'current_stock': item['current_stock'],
+                    'reorder_level': item['reorder_level'],
+                    'recommended_order_qty': round(reorder_quantity),
+                    'avg_daily_consumption': round(avg_daily_consumption, 2),
+                    'avg_lead_time_days': round(lead_time),
+                    'days_until_stockout': round(days_until_stockout, 1) if days_until_stockout < 999 else None,
+                    'estimated_cost': round(reorder_quantity * item['avg_unit_price'], 2),
+                    'priority': 'critical' if days_until_stockout < 7 else 'high' if days_until_stockout < 14 else 'medium'
+                })
+
+        # Sort by priority
+        priority_order = {'critical': 0, 'high': 1, 'medium': 2}
+        recommendations.sort(key=lambda x: priority_order[x['priority']])
+
+        conn.close()
+        return recommendations
+
+    except Exception as e:
+        logging.error(f"Error getting reorder recommendations: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting reorder recommendations: {str(e)}")
+
+
+@app.get("/forecasting/stock-trends")
+async def get_stock_trends(
+    item_name: Optional[str] = None,
+    days: int = 30,
+    current_user: User = Depends(get_current_user)
+):
+    """Get stock level trends over time"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build item filter
+        item_filter = ""
+        params = [days]
+        if item_name:
+            item_filter = "AND h.item_name = ?"
+            params.append(item_name)
+
+        # Get historical stock levels from history
+        cursor.execute(
+            f"""SELECT
+                   h.item_name,
+                   DATE(h.timestamp) as date,
+                   h.quantity,
+                   h.action
+               FROM history h
+               WHERE h.timestamp >= datetime('now', '-? days')
+               {item_filter}
+               ORDER BY h.item_name, h.timestamp""",
+            params
+        )
+
+        history = cursor.fetchall()
+
+        # Group by item and date
+        trends = {}
+        for row in history:
+            item = row['item_name']
+            date = row['date']
+
+            if item not in trends:
+                trends[item] = {}
+
+            if date not in trends[item]:
+                trends[item][date] = {
+                    'date': date,
+                    'quantity': row['quantity'],
+                    'actions': []
+                }
+
+            trends[item][date]['actions'].append(row['action'])
+
+        # Format response
+        result = []
+        for item, dates in trends.items():
+            result.append({
+                'item_name': item,
+                'trend_data': list(dates.values())
+            })
+
+        conn.close()
+        return result
+
+    except Exception as e:
+        logging.error(f"Error getting stock trends: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting stock trends: {str(e)}")
+
+
+@app.get("/forecasting/seasonal-analysis")
+async def get_seasonal_analysis(
+    current_user: User = Depends(get_current_user)
+):
+    """Analyze seasonal patterns in inventory movement"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get movements by month for the past year
+        cursor.execute("""
+            SELECT
+                sa.item_name,
+                strftime('%m', sa.adjustment_date) as month,
+                strftime('%Y', sa.adjustment_date) as year,
+                SUM(CASE WHEN sa.adjustment_type = 'decrease' THEN sa.quantity ELSE 0 END) as total_out,
+                COUNT(*) as movement_count
+            FROM stock_adjustments sa
+            WHERE sa.adjustment_date >= datetime('now', '-365 days')
+            GROUP BY sa.item_name, month, year
+            ORDER BY sa.item_name, year, month
+        """)
+
+        movements = cursor.fetchall()
+
+        # Analyze patterns
+        item_patterns = {}
+        for row in movements:
+            item = row['item_name']
+            month = int(row['month'])
+
+            if item not in item_patterns:
+                item_patterns[item] = {
+                    'item_name': item,
+                    'monthly_data': {},
+                    'peak_month': None,
+                    'low_month': None,
+                    'avg_monthly_movement': 0
+                }
+
+            if month not in item_patterns[item]['monthly_data']:
+                item_patterns[item]['monthly_data'][month] = {
+                    'month': month,
+                    'total_movement': 0,
+                    'count': 0
+                }
+
+            item_patterns[item]['monthly_data'][month]['total_movement'] += row['total_out']
+            item_patterns[item]['monthly_data'][month]['count'] += 1
+
+        # Calculate peaks and averages
+        result = []
+        month_names = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+        for item, data in item_patterns.items():
+            if data['monthly_data']:
+                monthly_totals = {m: d['total_movement'] for m, d in data['monthly_data'].items()}
+                peak_month = max(monthly_totals, key=monthly_totals.get)
+                low_month = min(monthly_totals, key=monthly_totals.get)
+                avg_movement = sum(monthly_totals.values()) / len(monthly_totals)
+
+                # Calculate seasonality index (peak / average)
+                seasonality_index = (monthly_totals[peak_month] / avg_movement) if avg_movement > 0 else 1
+
+                result.append({
+                    'item_name': item,
+                    'peak_month': month_names[peak_month],
+                    'peak_month_movement': monthly_totals[peak_month],
+                    'low_month': month_names[low_month],
+                    'low_month_movement': monthly_totals[low_month],
+                    'avg_monthly_movement': round(avg_movement, 2),
+                    'seasonality_index': round(seasonality_index, 2),
+                    'is_seasonal': seasonality_index > 1.5,
+                    'monthly_breakdown': [
+                        {
+                            'month': month_names[m],
+                            'movement': d['total_movement']
+                        }
+                        for m, d in sorted(data['monthly_data'].items())
+                    ]
+                })
+
+        # Sort by seasonality index
+        result.sort(key=lambda x: x['seasonality_index'], reverse=True)
+
+        conn.close()
+        return result
+
+    except Exception as e:
+        logging.error(f"Error analyzing seasonal patterns: {e}")
+        raise HTTPException(status_code=500, detail=f"Error analyzing seasonal patterns: {str(e)}")
+
+# ============================================================================
 # Health Check
 # ============================================================================
 

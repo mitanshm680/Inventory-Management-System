@@ -518,6 +518,31 @@ export class ApiService {
         const response = await this.api.get('/analytics/profit-margins');
         return response.data;
     }
+
+    // Forecasting
+    async getDemandPrediction(itemName?: string, daysAhead: number = 30): Promise<any> {
+        const params: any = { days_ahead: daysAhead };
+        if (itemName) params.item_name = itemName;
+        const response = await this.api.get('/forecasting/demand-prediction', { params });
+        return response.data;
+    }
+
+    async getReorderRecommendations(): Promise<any> {
+        const response = await this.api.get('/forecasting/reorder-recommendations');
+        return response.data;
+    }
+
+    async getStockTrends(itemName?: string, days: number = 30): Promise<any> {
+        const params: any = { days };
+        if (itemName) params.item_name = itemName;
+        const response = await this.api.get('/forecasting/stock-trends', { params });
+        return response.data;
+    }
+
+    async getSeasonalAnalysis(): Promise<any> {
+        const response = await this.api.get('/forecasting/seasonal-analysis');
+        return response.data;
+    }
 }
 
 export const apiService = new ApiService(); 
