@@ -115,6 +115,27 @@ const Reports: React.FC = () => {
     }
   };
 
+  const handleExportExcel = async () => {
+    try {
+      if (user?.role !== 'admin') {
+        alert('Only admins can export data');
+        return;
+      }
+      const blob = await apiService.exportToExcel();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `inventory_report_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting Excel:', err);
+      alert('Failed to export Excel');
+    }
+  };
+
   if (loading) {
     return (
       <Container>
@@ -131,13 +152,22 @@ const Reports: React.FC = () => {
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h4">Reports & Analytics</Typography>
           {user?.role === 'admin' && (
-            <Button
-              variant="contained"
-              startIcon={<DownloadIcon />}
-              onClick={handleExportCSV}
-            >
-              Export CSV
-            </Button>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <Button
+                variant="outlined"
+                startIcon={<DownloadIcon />}
+                onClick={handleExportCSV}
+              >
+                Export CSV
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={<DownloadIcon />}
+                onClick={handleExportExcel}
+              >
+                Export Excel
+              </Button>
+            </Box>
           )}
         </Box>
 
