@@ -448,6 +448,51 @@ def setup_database():
                 ON purchase_order_items(item_name)
             """)
 
+            # Create audit_log table (for tracking all important actions)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action_type TEXT NOT NULL CHECK(action_type IN (
+                        'create', 'update', 'delete', 'login', 'logout',
+                        'export', 'import', 'approve', 'reject', 'transfer', 'adjust'
+                    )),
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT,
+                    entity_name TEXT,
+                    user_name TEXT NOT NULL,
+                    user_role TEXT,
+                    description TEXT,
+                    old_values TEXT,
+                    new_values TEXT,
+                    ip_address TEXT,
+                    user_agent TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    success INTEGER DEFAULT 1,
+                    error_message TEXT
+                )
+            """)
+
+            # Create indexes for audit_log
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_user
+                ON audit_log(user_name)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp
+                ON audit_log(timestamp DESC)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_entity
+                ON audit_log(entity_type, entity_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_action
+                ON audit_log(action_type)
+            """)
+
             # Add coordinates to locations for distance calculations
             cursor.execute("""
                 SELECT COUNT(*) FROM pragma_table_info('locations')

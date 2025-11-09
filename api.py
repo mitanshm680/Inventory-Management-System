@@ -4515,6 +4515,272 @@ async def compare_supplier_performance(
         raise HTTPException(status_code=500, detail=f"Error comparing supplier performance: {str(e)}")
 
 # ============================================================================
+# AUDIT LOG SYSTEM
+# ============================================================================
+
+def create_audit_log(
+    action_type: str,
+    entity_type: str,
+    user_name: str,
+    entity_id: str = None,
+    entity_name: str = None,
+    description: str = None,
+    old_values: str = None,
+    new_values: str = None,
+    user_role: str = None,
+    success: bool = True,
+    error_message: str = None
+):
+    """Helper function to create audit log entries"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO audit_log (
+                action_type, entity_type, entity_id, entity_name,
+                user_name, user_role, description, old_values, new_values,
+                success, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            action_type, entity_type, entity_id, entity_name,
+            user_name, user_role, description, old_values, new_values,
+            1 if success else 0, error_message
+        ))
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Error creating audit log: {e}")
+
+
+@app.get("/audit-log")
+async def get_audit_log(
+    action_type: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    user_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_admin_user)
+):
+    """Get audit log entries with filtering"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build query with filters
+        query = "SELECT * FROM audit_log WHERE 1=1"
+        params = []
+
+        if action_type:
+            query += " AND action_type = ?"
+            params.append(action_type)
+
+        if entity_type:
+            query += " AND entity_type = ?"
+            params.append(entity_type)
+
+        if user_name:
+            query += " AND user_name = ?"
+            params.append(user_name)
+
+        if start_date:
+            query += " AND timestamp >= ?"
+            params.append(start_date)
+
+        if end_date:
+            query += " AND timestamp <= ?"
+            params.append(end_date)
+
+        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor.execute(query, params)
+        logs = [dict(row) for row in cursor.fetchall()]
+
+        # Get total count
+        count_query = "SELECT COUNT(*) as total FROM audit_log WHERE 1=1"
+        count_params = []
+
+        if action_type:
+            count_query += " AND action_type = ?"
+            count_params.append(action_type)
+
+        if entity_type:
+            count_query += " AND entity_type = ?"
+            count_params.append(entity_type)
+
+        if user_name:
+            count_query += " AND user_name = ?"
+            count_params.append(user_name)
+
+        if start_date:
+            count_query += " AND timestamp >= ?"
+            count_params.append(start_date)
+
+        if end_date:
+            count_query += " AND timestamp <= ?"
+            count_params.append(end_date)
+
+        cursor.execute(count_query, count_params)
+        total = cursor.fetchone()['total']
+
+        conn.close()
+
+        return {
+            "logs": logs,
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+
+    except Exception as e:
+        logging.error(f"Error fetching audit log: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching audit log: {str(e)}")
+
+
+@app.get("/audit-log/statistics")
+async def get_audit_statistics(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Get audit log statistics"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build date filter
+        date_filter = ""
+        params = []
+        if start_date:
+            date_filter += " AND timestamp >= ?"
+            params.append(start_date)
+        if end_date:
+            date_filter += " AND timestamp <= ?"
+            params.append(end_date)
+
+        # Get action type breakdown
+        cursor.execute(
+            f"""SELECT action_type, COUNT(*) as count
+               FROM audit_log
+               WHERE 1=1{date_filter}
+               GROUP BY action_type
+               ORDER BY count DESC""",
+            params
+        )
+        actions_breakdown = [dict(row) for row in cursor.fetchall()]
+
+        # Get entity type breakdown
+        cursor.execute(
+            f"""SELECT entity_type, COUNT(*) as count
+               FROM audit_log
+               WHERE 1=1{date_filter}
+               GROUP BY entity_type
+               ORDER BY count DESC""",
+            params
+        )
+        entities_breakdown = [dict(row) for row in cursor.fetchall()]
+
+        # Get user activity
+        cursor.execute(
+            f"""SELECT user_name, COUNT(*) as action_count
+               FROM audit_log
+               WHERE 1=1{date_filter}
+               GROUP BY user_name
+               ORDER BY action_count DESC
+               LIMIT 10""",
+            params
+        )
+        top_users = [dict(row) for row in cursor.fetchall()]
+
+        # Get total counts
+        cursor.execute(
+            f"""SELECT
+                   COUNT(*) as total_actions,
+                   SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_actions,
+                   SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed_actions
+               FROM audit_log
+               WHERE 1=1{date_filter}""",
+            params
+        )
+        totals = dict(cursor.fetchone())
+
+        # Get recent activity (last 24 hours by hour)
+        cursor.execute("""
+            SELECT
+                strftime('%H:00', timestamp) as hour,
+                COUNT(*) as count
+            FROM audit_log
+            WHERE timestamp >= datetime('now', '-24 hours')
+            GROUP BY hour
+            ORDER BY hour
+        """)
+        hourly_activity = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        return {
+            "totals": totals,
+            "actions_breakdown": actions_breakdown,
+            "entities_breakdown": entities_breakdown,
+            "top_users": top_users,
+            "hourly_activity": hourly_activity
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting audit statistics: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting audit statistics: {str(e)}")
+
+
+@app.get("/audit-log/user/{username}")
+async def get_user_audit_log(
+    username: str,
+    limit: int = 50,
+    current_user: User = Depends(get_admin_user)
+):
+    """Get audit log for a specific user"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM audit_log
+            WHERE user_name = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (username, limit))
+
+        logs = [dict(row) for row in cursor.fetchall()]
+
+        # Get user statistics
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_actions,
+                COUNT(DISTINCT DATE(timestamp)) as active_days,
+                MIN(timestamp) as first_action,
+                MAX(timestamp) as last_action
+            FROM audit_log
+            WHERE user_name = ?
+        """, (username,))
+
+        stats = dict(cursor.fetchone())
+
+        conn.close()
+
+        return {
+            "username": username,
+            "logs": logs,
+            "statistics": stats
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting user audit log: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting user audit log: {str(e)}")
+
+# ============================================================================
 # Health Check
 # ============================================================================
 
