@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Paper,
@@ -82,11 +82,7 @@ const Locations: React.FC = () => {
     notes: ''
   });
 
-  useEffect(() => {
-    fetchLocations();
-  }, [showActiveOnly]);
-
-  const fetchLocations = async () => {
+  const fetchLocations = useCallback(async () => {
     try {
       setLoading(true);
       const data = await apiService.getLocations(showActiveOnly);
@@ -100,7 +96,11 @@ const Locations: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [showActiveOnly]);
+
+  useEffect(() => {
+    fetchLocations();
+  }, [fetchLocations]);
 
   const handleOpenDialog = (location?: Location) => {
     if (location) {

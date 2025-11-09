@@ -36,11 +36,9 @@ import {
   Divider
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import HistoryIcon from '@mui/icons-material/History';
 import SavingsIcon from '@mui/icons-material/Savings';
-import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { useAuth } from '../contexts/AuthContext';
 import { InventoryItem } from '../types';
 import { apiService } from '../services/api';

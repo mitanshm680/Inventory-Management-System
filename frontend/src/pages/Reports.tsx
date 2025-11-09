@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Typography,
@@ -67,11 +67,7 @@ const Reports: React.FC = () => {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [threshold, setThreshold] = useState(10);
 
-  useEffect(() => {
-    fetchReports();
-  }, [threshold]);
-
-  const fetchReports = async () => {
+  const fetchReports = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -92,7 +88,11 @@ const Reports: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [threshold]);
+
+  useEffect(() => {
+    fetchReports();
+  }, [fetchReports]);
 
   const handleExportCSV = async () => {
     try {

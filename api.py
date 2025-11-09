@@ -2435,6 +2435,87 @@ async def export_inventory_csv(
         logging.error(f"Error exporting CSV: {e}")
         raise HTTPException(status_code=500, detail="Error exporting data")
 
+@app.get("/export/excel")
+async def export_inventory_excel(
+    groups: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Export inventory to Excel file (admin only)"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"inventory_export_{timestamp}.xlsx"
+        group_list = groups.split(',') if groups else None
+
+        # Get inventory data
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        if group_list:
+            placeholders = ','.join('?' * len(group_list))
+            query = f"SELECT * FROM items WHERE group_name IN ({placeholders})"
+            cursor.execute(query, group_list)
+        else:
+            cursor.execute("SELECT * FROM items")
+
+        items = cursor.fetchall()
+
+        # Create workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Inventory"
+
+        # Header style
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+
+        # Add headers
+        headers = ["Item Name", "Quantity", "Group", "Reorder Level", "Unit", "Location", "Description", "Created At"]
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        # Add data
+        for row_num, item in enumerate(items, 2):
+            ws.cell(row=row_num, column=1, value=item[0])  # item_name
+            ws.cell(row=row_num, column=2, value=item[1])  # quantity
+            ws.cell(row=row_num, column=3, value=item[2])  # group_name
+            ws.cell(row=row_num, column=4, value=item[3])  # reorder_point
+            ws.cell(row=row_num, column=5, value=item[4])  # unit
+            ws.cell(row=row_num, column=6, value=item[5])  # location
+            ws.cell(row=row_num, column=7, value=item[6])  # description
+            ws.cell(row=row_num, column=8, value=item[7])  # created_at
+
+        # Auto-size columns
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        # Save file
+        wb.save(filename)
+        conn.close()
+
+        return FileResponse(
+            filename,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            filename=filename
+        )
+    except Exception as e:
+        logging.error(f"Error exporting Excel: {e}")
+        raise HTTPException(status_code=500, detail=f"Error exporting data: {str(e)}")
+
 # ============================================================================
 # NOTES/COMMENTS ENDPOINTS
 # ============================================================================
