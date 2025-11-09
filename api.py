@@ -2412,6 +2412,96 @@ async def import_inventory_csv(
         logging.error(f"Error importing CSV: {e}")
         raise HTTPException(status_code=500, detail=f"Error importing CSV: {str(e)}")
 
+@app.post("/import/excel")
+async def import_inventory_excel(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Import inventory items from Excel file"""
+    try:
+        from openpyxl import load_workbook
+        from io import BytesIO
+
+        # Read file content
+        content = await file.read()
+        workbook = load_workbook(BytesIO(content))
+        sheet = workbook.active
+
+        imported = []
+        updated = []
+        failed = []
+
+        # Get headers from first row
+        headers = [cell.value for cell in sheet[1]]
+
+        with db_connection.get_cursor() as cursor:
+            for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                try:
+                    # Create dict from row
+                    row_dict = dict(zip(headers, row))
+
+                    item_name = row_dict.get('Item Name') or row_dict.get('item_name')
+                    if not item_name:
+                        failed.append({"row": row_idx, "reason": "Missing item name"})
+                        continue
+
+                    quantity = int(row_dict.get('Quantity', 0))
+                    group_name = row_dict.get('Group') or row_dict.get('group_name')
+                    reorder_level = int(row_dict.get('Reorder Level', 10)) if row_dict.get('Reorder Level') else 10
+                    unit = row_dict.get('Unit', 'units')
+                    location = row_dict.get('Location', '')
+                    description = row_dict.get('Description', '')
+
+                    # Check if item exists
+                    cursor.execute("SELECT 1 FROM items WHERE item_name = ?", (item_name,))
+                    exists = cursor.fetchone()
+
+                    if exists:
+                        # Update existing
+                        cursor.execute(
+                            """UPDATE items SET quantity = ?, group_name = ?, reorder_point = ?,
+                               unit = ?, location = ?, description = ?, updated_at = ?
+                               WHERE item_name = ?""",
+                            (quantity, group_name, reorder_level, unit, location, description,
+                             datetime.now().isoformat(), item_name)
+                        )
+                        updated.append(item_name)
+                    else:
+                        # Insert new
+                        cursor.execute(
+                            """INSERT INTO items
+                               (item_name, quantity, group_name, reorder_point, unit, location, description, created_at, updated_at)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (item_name, quantity, group_name, reorder_level, unit, location, description,
+                             datetime.now().isoformat(), datetime.now().isoformat())
+                        )
+                        imported.append(item_name)
+
+                        # Log to history
+                        cursor.execute(
+                            """INSERT INTO history (action, item_name, quantity, group_name, user, timestamp)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            ('added', item_name, quantity, group_name, current_user.username, datetime.now().isoformat())
+                        )
+
+                except Exception as row_error:
+                    failed.append({"row": row_idx, "reason": str(row_error)})
+                    continue
+
+        logging.info(f"Excel import completed: {len(imported)} imported, {len(updated)} updated, {len(failed)} failed")
+
+        return {
+            "status": "success",
+            "imported": len(imported),
+            "updated": len(updated),
+            "failed": len(failed),
+            "failed_items": failed[:10] if failed else []  # Return first 10 failures
+        }
+
+    except Exception as e:
+        logging.error(f"Error importing Excel: {e}")
+        raise HTTPException(status_code=500, detail=f"Error importing Excel: {str(e)}")
+
 @app.get("/export/csv")
 async def export_inventory_csv(
     groups: Optional[str] = None,
@@ -2624,6 +2714,193 @@ async def export_inventory_pdf(
     except Exception as e:
         logging.error(f"Error exporting PDF: {e}")
         raise HTTPException(status_code=500, detail=f"Error exporting PDF: {str(e)}")
+
+# ============================================================================
+# QR CODE GENERATION ENDPOINTS
+# ============================================================================
+
+@app.get("/items/{item_name}/qrcode")
+async def generate_item_qrcode(
+    item_name: str,
+    size: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """Generate QR code for an item"""
+    try:
+        import qrcode
+        from io import BytesIO
+
+        # Get item details
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM items WHERE item_name = ?", (item_name,))
+        item = cursor.fetchone()
+        conn.close()
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        # Create QR code data
+        qr_data = {
+            "item_name": item[0],
+            "quantity": item[1],
+            "group": item[2],
+            "reorder_point": item[3],
+        }
+        import json
+        qr_content = json.dumps(qr_data)
+
+        # Generate QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=size,
+            border=4,
+        )
+        qr.add_data(qr_content)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        # Save to bytes
+        img_byte_arr = BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+
+        return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+    except Exception as e:
+        logging.error(f"Error generating QR code: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating QR code: {str(e)}")
+
+@app.get("/items/{item_name}/barcode")
+async def generate_item_barcode(
+    item_name: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Generate barcode for an item (Code128)"""
+    try:
+        from barcode import Code128
+        from barcode.writer import ImageWriter
+        from io import BytesIO
+
+        # Create barcode
+        # Use item name or a unique identifier
+        barcode_data = item_name.replace(" ", "_")[:20]  # Limit length
+
+        barcode = Code128(barcode_data, writer=ImageWriter())
+
+        # Save to bytes
+        img_byte_arr = BytesIO()
+        barcode.write(img_byte_arr)
+        img_byte_arr.seek(0)
+
+        return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="Barcode generation not available. Install python-barcode library."
+        )
+    except Exception as e:
+        logging.error(f"Error generating barcode: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating barcode: {str(e)}")
+
+@app.post("/items/{item_name}/print-label")
+async def generate_print_label(
+    item_name: str,
+    include_qrcode: bool = True,
+    current_user: User = Depends(get_current_user)
+):
+    """Generate printable label with QR code"""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Image
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib import colors
+        import qrcode
+        from io import BytesIO
+
+        # Get item details
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM items WHERE item_name = ?", (item_name,))
+        item = cursor.fetchone()
+        conn.close()
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"label_{item_name}_{timestamp}.pdf"
+
+        # Create PDF
+        doc = SimpleDocTemplate(
+            filename,
+            pagesize=(4*inch, 2*inch),  # Label size
+            topMargin=0.25*inch,
+            bottomMargin=0.25*inch,
+            leftMargin=0.25*inch,
+            rightMargin=0.25*inch
+        )
+        elements = []
+        styles = getSampleStyleSheet()
+
+        if include_qrcode:
+            # Generate QR code
+            import json
+            qr_data = json.dumps({
+                "item_name": item[0],
+                "quantity": item[1],
+                "group": item[2]
+            })
+            qr = qrcode.QRCode(version=1, box_size=10, border=2)
+            qr.add_data(qr_data)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+
+            # Save QR to bytes
+            qr_byte_arr = BytesIO()
+            qr_img.save(qr_byte_arr, format='PNG')
+            qr_byte_arr.seek(0)
+
+            # Create layout
+            data = [
+                [
+                    Image(qr_byte_arr, width=1.2*inch, height=1.2*inch),
+                    [
+                        Paragraph(f"<b>{item[0]}</b>", styles['Heading2']),
+                        Paragraph(f"Qty: {item[1]}", styles['Normal']),
+                        Paragraph(f"Group: {item[2] or 'N/A'}", styles['Normal']),
+                        Paragraph(f"Reorder: {item[3] or 'N/A'}", styles['Normal']),
+                    ]
+                ]
+            ]
+        else:
+            data = [
+                [
+                    Paragraph(f"<b>{item[0]}</b>", styles['Heading1']),
+                ],
+                [
+                    Paragraph(f"Quantity: {item[1]}", styles['Normal']),
+                ],
+                [
+                    Paragraph(f"Group: {item[2] or 'N/A'}", styles['Normal']),
+                ]
+            ]
+
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ]))
+
+        elements.append(table)
+        doc.build(elements)
+
+        return FileResponse(filename, media_type='application/pdf', filename=filename)
+    except Exception as e:
+        logging.error(f"Error generating label: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating label: {str(e)}")
 
 # ============================================================================
 # NOTES/COMMENTS ENDPOINTS
