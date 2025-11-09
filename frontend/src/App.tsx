@@ -22,6 +22,7 @@ import StockAdjustments from './pages/StockAdjustments';
 import PurchaseOrders from './pages/PurchaseOrders';
 import Analytics from './pages/Analytics';
 import Forecasting from './pages/Forecasting';
+import AuditLog from './pages/AuditLog';
 // Removed: SupplierProducts and SupplierLocations - now part of Suppliers page with tabs
 
 // Hooks
@@ -187,6 +188,16 @@ const App: React.FC = () => {
             <ProtectedRoute>
               <MainLayout>
                 <Forecasting />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/audit-log"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <MainLayout>
+                <AuditLog />
               </MainLayout>
             </ProtectedRoute>
           }
