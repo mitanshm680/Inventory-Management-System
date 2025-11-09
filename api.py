@@ -3486,6 +3486,456 @@ async def delete_note(note_id: int, current_user: User = Depends(get_current_use
         raise HTTPException(status_code=500, detail="Error deleting note")
 
 # ============================================================================
+# FINANCIAL REPORTING AND ANALYTICS
+# ============================================================================
+
+@app.get("/analytics/financial-summary")
+async def get_financial_summary(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get financial summary with revenue, costs, and profit"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build date filter
+        date_filter = ""
+        params = []
+        if start_date:
+            date_filter += " AND po.order_date >= ?"
+            params.append(start_date)
+        if end_date:
+            date_filter += " AND po.order_date <= ?"
+            params.append(end_date)
+
+        # Get total purchase costs from purchase orders
+        cursor.execute(
+            f"""SELECT
+                   COALESCE(SUM(total_amount), 0) as total_purchase_cost,
+                   COUNT(DISTINCT id) as total_orders
+               FROM purchase_orders po
+               WHERE status = 'received'{date_filter}""",
+            params
+        )
+        purchase_data = cursor.fetchone()
+        total_purchase_cost = purchase_data['total_purchase_cost'] if purchase_data else 0
+        total_orders = purchase_data['total_orders'] if purchase_data else 0
+
+        # Calculate current inventory value based on latest prices
+        cursor.execute("""
+            SELECT
+                COALESCE(SUM(i.quantity * COALESCE(p.price, 0)), 0) as inventory_value,
+                COUNT(DISTINCT i.item_name) as total_items
+            FROM items i
+            LEFT JOIN (
+                SELECT item_name, AVG(price) as price
+                FROM prices
+                GROUP BY item_name
+            ) p ON i.item_name = p.item_name
+        """)
+        inventory_data = cursor.fetchone()
+        inventory_value = inventory_data['inventory_value'] if inventory_data else 0
+        total_items = inventory_data['total_items'] if inventory_data else 0
+
+        # Get stock adjustments for revenue estimation (returned items)
+        cursor.execute(
+            f"""SELECT
+                   COUNT(*) as total_adjustments,
+                   COALESCE(SUM(CASE WHEN adjustment_type = 'increase' THEN quantity ELSE 0 END), 0) as items_added,
+                   COALESCE(SUM(CASE WHEN adjustment_type = 'decrease' THEN quantity ELSE 0 END), 0) as items_removed
+               FROM stock_adjustments
+               WHERE 1=1{date_filter.replace('po.', '')}""",
+            params
+        )
+        adjustments = cursor.fetchone()
+
+        # Calculate estimated revenue (items sold * average price)
+        # Assuming items_removed represents sales/usage
+        items_sold = adjustments['items_removed'] if adjustments else 0
+        cursor.execute("""
+            SELECT AVG(price) as avg_price
+            FROM prices
+        """)
+        avg_price_data = cursor.fetchone()
+        avg_price = avg_price_data['avg_price'] if avg_price_data and avg_price_data['avg_price'] else 0
+        estimated_revenue = items_sold * avg_price
+
+        # Calculate profit margin
+        gross_profit = estimated_revenue - total_purchase_cost
+        profit_margin = (gross_profit / estimated_revenue * 100) if estimated_revenue > 0 else 0
+
+        conn.close()
+
+        return {
+            "total_purchase_cost": round(total_purchase_cost, 2),
+            "estimated_revenue": round(estimated_revenue, 2),
+            "gross_profit": round(gross_profit, 2),
+            "profit_margin_percent": round(profit_margin, 2),
+            "current_inventory_value": round(inventory_value, 2),
+            "total_items": total_items,
+            "total_purchase_orders": total_orders,
+            "items_sold": items_sold,
+            "items_added": adjustments['items_added'] if adjustments else 0,
+            "total_adjustments": adjustments['total_adjustments'] if adjustments else 0
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting financial summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting financial summary: {str(e)}")
+
+
+@app.get("/analytics/inventory-value")
+async def get_inventory_value_breakdown(
+    current_user: User = Depends(get_current_user)
+):
+    """Get inventory value broken down by group/category"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                COALESCE(i.group_name, 'Uncategorized') as category,
+                COUNT(i.item_name) as item_count,
+                SUM(i.quantity) as total_quantity,
+                COALESCE(SUM(i.quantity * p.avg_price), 0) as total_value,
+                COALESCE(AVG(p.avg_price), 0) as avg_unit_price
+            FROM items i
+            LEFT JOIN (
+                SELECT item_name, AVG(price) as avg_price
+                FROM prices
+                GROUP BY item_name
+            ) p ON i.item_name = p.item_name
+            GROUP BY i.group_name
+            ORDER BY total_value DESC
+        """)
+
+        breakdown = []
+        for row in cursor.fetchall():
+            breakdown.append({
+                "category": row['category'],
+                "item_count": row['item_count'],
+                "total_quantity": row['total_quantity'],
+                "total_value": round(row['total_value'], 2),
+                "avg_unit_price": round(row['avg_unit_price'], 2)
+            })
+
+        conn.close()
+        return breakdown
+
+    except Exception as e:
+        logging.error(f"Error getting inventory value breakdown: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting inventory value breakdown: {str(e)}")
+
+
+@app.get("/analytics/top-items")
+async def get_top_items(
+    metric: str = 'value',  # 'value', 'quantity', 'movement'
+    limit: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """Get top items by various metrics"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        if metric == 'value':
+            # Top items by total value
+            cursor.execute("""
+                SELECT
+                    i.item_name,
+                    i.quantity,
+                    i.group_name,
+                    COALESCE(p.avg_price, 0) as unit_price,
+                    i.quantity * COALESCE(p.avg_price, 0) as total_value
+                FROM items i
+                LEFT JOIN (
+                    SELECT item_name, AVG(price) as avg_price
+                    FROM prices
+                    GROUP BY item_name
+                ) p ON i.item_name = p.item_name
+                ORDER BY total_value DESC
+                LIMIT ?
+            """, (limit,))
+        elif metric == 'quantity':
+            # Top items by quantity in stock
+            cursor.execute("""
+                SELECT
+                    i.item_name,
+                    i.quantity,
+                    i.group_name,
+                    COALESCE(p.avg_price, 0) as unit_price,
+                    i.quantity * COALESCE(p.avg_price, 0) as total_value
+                FROM items i
+                LEFT JOIN (
+                    SELECT item_name, AVG(price) as avg_price
+                    FROM prices
+                    GROUP BY item_name
+                ) p ON i.item_name = p.item_name
+                ORDER BY i.quantity DESC
+                LIMIT ?
+            """, (limit,))
+        else:  # movement
+            # Top items by stock movement (adjustments)
+            cursor.execute("""
+                SELECT
+                    sa.item_name,
+                    i.quantity as current_quantity,
+                    i.group_name,
+                    COUNT(*) as movement_count,
+                    SUM(sa.quantity) as total_moved,
+                    COALESCE(p.avg_price, 0) as unit_price
+                FROM stock_adjustments sa
+                JOIN items i ON sa.item_name = i.item_name
+                LEFT JOIN (
+                    SELECT item_name, AVG(price) as avg_price
+                    FROM prices
+                    GROUP BY item_name
+                ) p ON i.item_name = p.item_name
+                WHERE sa.adjustment_date >= datetime('now', '-30 days')
+                GROUP BY sa.item_name, i.quantity, i.group_name
+                ORDER BY total_moved DESC
+                LIMIT ?
+            """, (limit,))
+
+        items = []
+        for row in cursor.fetchall():
+            item_data = {
+                "item_name": row['item_name'],
+                "group_name": row['group_name'] or 'Uncategorized'
+            }
+
+            if metric == 'movement':
+                item_data.update({
+                    "current_quantity": row['current_quantity'],
+                    "movement_count": row['movement_count'],
+                    "total_moved": row['total_moved'],
+                    "unit_price": round(row['unit_price'], 2)
+                })
+            else:
+                item_data.update({
+                    "quantity": row['quantity'],
+                    "unit_price": round(row['unit_price'], 2),
+                    "total_value": round(row['total_value'], 2)
+                })
+
+            items.append(item_data)
+
+        conn.close()
+        return items
+
+    except Exception as e:
+        logging.error(f"Error getting top items: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting top items: {str(e)}")
+
+
+@app.get("/analytics/revenue-by-period")
+async def get_revenue_by_period(
+    period: str = 'daily',  # 'daily', 'weekly', 'monthly'
+    limit: int = 30,
+    current_user: User = Depends(get_current_user)
+):
+    """Get revenue/cost trends over time"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Determine date grouping
+        if period == 'daily':
+            date_format = '%Y-%m-%d'
+            date_trunc = "date(order_date)"
+        elif period == 'weekly':
+            date_format = '%Y-W%W'
+            date_trunc = "strftime('%Y-W%W', order_date)"
+        else:  # monthly
+            date_format = '%Y-%m'
+            date_trunc = "strftime('%Y-%m', order_date)"
+
+        # Get purchase costs by period
+        cursor.execute(f"""
+            SELECT
+                {date_trunc} as period,
+                SUM(total_amount) as total_cost,
+                COUNT(*) as order_count
+            FROM purchase_orders
+            WHERE status = 'received'
+                AND order_date >= datetime('now', '-{limit} days')
+            GROUP BY period
+            ORDER BY period DESC
+            LIMIT ?
+        """, (limit,))
+
+        periods = []
+        for row in cursor.fetchall():
+            periods.append({
+                "period": row['period'],
+                "total_cost": round(row['total_cost'], 2) if row['total_cost'] else 0,
+                "order_count": row['order_count']
+            })
+
+        conn.close()
+        return periods
+
+    except Exception as e:
+        logging.error(f"Error getting revenue by period: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting revenue by period: {str(e)}")
+
+
+@app.get("/analytics/cost-analysis")
+async def get_cost_analysis(
+    current_user: User = Depends(get_current_user)
+):
+    """Get cost analysis by supplier and item"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Cost by supplier
+        cursor.execute("""
+            SELECT
+                s.name as supplier_name,
+                s.id as supplier_id,
+                COUNT(DISTINCT po.id) as total_orders,
+                COALESCE(SUM(po.total_amount), 0) as total_spent,
+                COALESCE(AVG(po.total_amount), 0) as avg_order_value
+            FROM suppliers s
+            LEFT JOIN purchase_orders po ON s.id = po.supplier_id AND po.status = 'received'
+            GROUP BY s.id, s.name
+            HAVING total_orders > 0
+            ORDER BY total_spent DESC
+        """)
+
+        suppliers = []
+        for row in cursor.fetchall():
+            suppliers.append({
+                "supplier_name": row['supplier_name'],
+                "supplier_id": row['supplier_id'],
+                "total_orders": row['total_orders'],
+                "total_spent": round(row['total_spent'], 2),
+                "avg_order_value": round(row['avg_order_value'], 2)
+            })
+
+        # Cost by item (from PO items)
+        cursor.execute("""
+            SELECT
+                poi.item_name,
+                COUNT(DISTINCT poi.po_id) as order_count,
+                SUM(poi.quantity) as total_quantity_ordered,
+                COALESCE(AVG(poi.unit_price), 0) as avg_unit_cost,
+                COALESCE(SUM(poi.total_price), 0) as total_cost
+            FROM purchase_order_items poi
+            JOIN purchase_orders po ON poi.po_id = po.id
+            WHERE po.status = 'received'
+            GROUP BY poi.item_name
+            ORDER BY total_cost DESC
+            LIMIT 20
+        """)
+
+        items = []
+        for row in cursor.fetchall():
+            items.append({
+                "item_name": row['item_name'],
+                "order_count": row['order_count'],
+                "total_quantity_ordered": row['total_quantity_ordered'],
+                "avg_unit_cost": round(row['avg_unit_cost'], 2),
+                "total_cost": round(row['total_cost'], 2)
+            })
+
+        conn.close()
+        return {
+            "by_supplier": suppliers,
+            "by_item": items
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting cost analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting cost analysis: {str(e)}")
+
+
+@app.get("/analytics/profit-margins")
+async def get_profit_margins(
+    current_user: User = Depends(get_current_user)
+):
+    """Calculate profit margins by item and category"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Profit margins by item (comparing purchase cost vs selling price)
+        cursor.execute("""
+            SELECT
+                i.item_name,
+                i.group_name,
+                COALESCE(AVG(poi.unit_price), 0) as avg_cost,
+                COALESCE(AVG(p.price), 0) as avg_selling_price,
+                (COALESCE(AVG(p.price), 0) - COALESCE(AVG(poi.unit_price), 0)) as profit_per_unit,
+                CASE
+                    WHEN COALESCE(AVG(p.price), 0) > 0 THEN
+                        ((COALESCE(AVG(p.price), 0) - COALESCE(AVG(poi.unit_price), 0)) / COALESCE(AVG(p.price), 0) * 100)
+                    ELSE 0
+                END as profit_margin_percent
+            FROM items i
+            LEFT JOIN purchase_order_items poi ON i.item_name = poi.item_name
+            LEFT JOIN prices p ON i.item_name = p.item_name
+            GROUP BY i.item_name, i.group_name
+            HAVING avg_selling_price > 0 OR avg_cost > 0
+            ORDER BY profit_margin_percent DESC
+            LIMIT 20
+        """)
+
+        items = []
+        for row in cursor.fetchall():
+            items.append({
+                "item_name": row['item_name'],
+                "group_name": row['group_name'] or 'Uncategorized',
+                "avg_cost": round(row['avg_cost'], 2),
+                "avg_selling_price": round(row['avg_selling_price'], 2),
+                "profit_per_unit": round(row['profit_per_unit'], 2),
+                "profit_margin_percent": round(row['profit_margin_percent'], 2)
+            })
+
+        # Profit margins by category
+        cursor.execute("""
+            SELECT
+                COALESCE(i.group_name, 'Uncategorized') as category,
+                COUNT(DISTINCT i.item_name) as item_count,
+                COALESCE(AVG(poi.unit_price), 0) as avg_cost,
+                COALESCE(AVG(p.price), 0) as avg_selling_price,
+                CASE
+                    WHEN COALESCE(AVG(p.price), 0) > 0 THEN
+                        ((COALESCE(AVG(p.price), 0) - COALESCE(AVG(poi.unit_price), 0)) / COALESCE(AVG(p.price), 0) * 100)
+                    ELSE 0
+                END as profit_margin_percent
+            FROM items i
+            LEFT JOIN purchase_order_items poi ON i.item_name = poi.item_name
+            LEFT JOIN prices p ON i.item_name = p.item_name
+            GROUP BY i.group_name
+            ORDER BY profit_margin_percent DESC
+        """)
+
+        categories = []
+        for row in cursor.fetchall():
+            categories.append({
+                "category": row['category'],
+                "item_count": row['item_count'],
+                "avg_cost": round(row['avg_cost'], 2),
+                "avg_selling_price": round(row['avg_selling_price'], 2),
+                "profit_margin_percent": round(row['profit_margin_percent'], 2)
+            })
+
+        conn.close()
+        return {
+            "by_item": items,
+            "by_category": categories
+        }
+
+    except Exception as e:
+        logging.error(f"Error calculating profit margins: {e}")
+        raise HTTPException(status_code=500, detail=f"Error calculating profit margins: {str(e)}")
+
+# ============================================================================
 # Health Check
 # ============================================================================
 

@@ -480,6 +480,44 @@ export class ApiService {
         const response = await this.api.post(`/purchase-orders/${poId}/receive`, { items });
         return response.data;
     }
+
+    // Analytics
+    async getFinancialSummary(startDate?: string, endDate?: string): Promise<any> {
+        const params: any = {};
+        if (startDate) params.start_date = startDate;
+        if (endDate) params.end_date = endDate;
+        const response = await this.api.get('/analytics/financial-summary', { params });
+        return response.data;
+    }
+
+    async getInventoryValueBreakdown(): Promise<any> {
+        const response = await this.api.get('/analytics/inventory-value');
+        return response.data;
+    }
+
+    async getTopItems(metric: string = 'value', limit: number = 10): Promise<any> {
+        const response = await this.api.get('/analytics/top-items', {
+            params: { metric, limit }
+        });
+        return response.data;
+    }
+
+    async getRevenueByPeriod(period: string = 'daily', limit: number = 30): Promise<any> {
+        const response = await this.api.get('/analytics/revenue-by-period', {
+            params: { period, limit }
+        });
+        return response.data;
+    }
+
+    async getCostAnalysis(): Promise<any> {
+        const response = await this.api.get('/analytics/cost-analysis');
+        return response.data;
+    }
+
+    async getProfitMargins(): Promise<any> {
+        const response = await this.api.get('/analytics/profit-margins');
+        return response.data;
+    }
 }
 
 export const apiService = new ApiService(); 
