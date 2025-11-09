@@ -4279,6 +4279,242 @@ async def get_seasonal_analysis(
         raise HTTPException(status_code=500, detail=f"Error analyzing seasonal patterns: {str(e)}")
 
 # ============================================================================
+# SUPPLIER PERFORMANCE METRICS
+# ============================================================================
+
+@app.get("/suppliers/{supplier_id}/performance")
+async def get_supplier_performance(
+    supplier_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Get comprehensive performance metrics for a supplier"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Verify supplier exists
+        cursor.execute("SELECT name FROM suppliers WHERE id = ?", (supplier_id,))
+        supplier = cursor.fetchone()
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+
+        # Get all purchase orders from this supplier
+        cursor.execute("""
+            SELECT
+                id,
+                order_date,
+                expected_delivery_date,
+                actual_delivery_date,
+                status,
+                total_amount
+            FROM purchase_orders
+            WHERE supplier_id = ?
+        """, (supplier_id,))
+
+        orders = cursor.fetchall()
+
+        # Calculate on-time delivery rate
+        total_completed = 0
+        on_time_deliveries = 0
+        total_late_days = 0
+
+        for order in orders:
+            if order['status'] == 'received' and order['expected_delivery_date'] and order['actual_delivery_date']:
+                total_completed += 1
+                expected = datetime.fromisoformat(order['expected_delivery_date'])
+                actual = datetime.fromisoformat(order['actual_delivery_date'])
+                diff = (actual - expected).days
+
+                if diff <= 0:
+                    on_time_deliveries += 1
+                else:
+                    total_late_days += diff
+
+        on_time_rate = (on_time_deliveries / total_completed * 100) if total_completed > 0 else 0
+        avg_delay_days = (total_late_days / (total_completed - on_time_deliveries)) if (total_completed - on_time_deliveries) > 0 else 0
+
+        # Calculate price competitiveness
+        cursor.execute("""
+            SELECT
+                sp.item_name,
+                sp.unit_price as supplier_price,
+                (SELECT AVG(unit_price) FROM supplier_products WHERE item_name = sp.item_name AND is_available = 1) as market_avg
+            FROM supplier_products sp
+            WHERE sp.supplier_id = ? AND sp.is_available = 1
+        """, (supplier_id,))
+
+        price_data = cursor.fetchall()
+        competitive_count = 0
+        total_items = len(price_data)
+
+        for item in price_data:
+            if item['market_avg'] and item['supplier_price'] <= item['market_avg']:
+                competitive_count += 1
+
+        price_competitiveness = (competitive_count / total_items * 100) if total_items > 0 else 0
+
+        # Calculate order fulfillment statistics
+        total_orders = len(orders)
+        pending_orders = sum(1 for o in orders if o['status'] == 'pending')
+        confirmed_orders = sum(1 for o in orders if o['status'] == 'confirmed')
+        shipped_orders = sum(1 for o in orders if o['status'] == 'shipped')
+        received_orders = sum(1 for o in orders if o['status'] == 'received')
+        cancelled_orders = sum(1 for o in orders if o['status'] == 'cancelled')
+
+        fulfillment_rate = (received_orders / (total_orders - cancelled_orders) * 100) if (total_orders - cancelled_orders) > 0 else 0
+        cancellation_rate = (cancelled_orders / total_orders * 100) if total_orders > 0 else 0
+
+        # Calculate total spending and average order value
+        total_spent = sum(o['total_amount'] for o in orders if o['status'] == 'received')
+        avg_order_value = (total_spent / received_orders) if received_orders > 0 else 0
+
+        # Get lead time statistics
+        cursor.execute("""
+            SELECT AVG(lead_time_days) as avg_lead_time
+            FROM supplier_products
+            WHERE supplier_id = ? AND is_available = 1
+        """, (supplier_id,))
+
+        lead_time_data = cursor.fetchone()
+        avg_lead_time = lead_time_data['avg_lead_time'] if lead_time_data and lead_time_data['avg_lead_time'] else 0
+
+        # Get supplier rating
+        cursor.execute("SELECT rating FROM suppliers WHERE id = ?", (supplier_id,))
+        rating_data = cursor.fetchone()
+        supplier_rating = rating_data['rating'] if rating_data and rating_data['rating'] else 0
+
+        # Calculate overall performance score (0-100)
+        # Weighted: On-time 30%, Price 25%, Fulfillment 25%, Rating 20%
+        performance_score = (
+            (on_time_rate * 0.30) +
+            (price_competitiveness * 0.25) +
+            (fulfillment_rate * 0.25) +
+            (supplier_rating * 20 * 0.20)  # Convert rating from 1-5 to percentage
+        )
+
+        conn.close()
+
+        return {
+            'supplier_id': supplier_id,
+            'supplier_name': supplier['name'],
+            'overall_performance_score': round(performance_score, 2),
+            'delivery_performance': {
+                'on_time_delivery_rate': round(on_time_rate, 2),
+                'total_completed_orders': total_completed,
+                'on_time_deliveries': on_time_deliveries,
+                'late_deliveries': total_completed - on_time_deliveries,
+                'avg_delay_days': round(avg_delay_days, 2)
+            },
+            'price_performance': {
+                'price_competitiveness_score': round(price_competitiveness, 2),
+                'competitive_items': competitive_count,
+                'total_items_supplied': total_items
+            },
+            'order_statistics': {
+                'total_orders': total_orders,
+                'pending_orders': pending_orders,
+                'confirmed_orders': confirmed_orders,
+                'shipped_orders': shipped_orders,
+                'received_orders': received_orders,
+                'cancelled_orders': cancelled_orders,
+                'fulfillment_rate': round(fulfillment_rate, 2),
+                'cancellation_rate': round(cancellation_rate, 2)
+            },
+            'financial_metrics': {
+                'total_spent': round(total_spent, 2),
+                'avg_order_value': round(avg_order_value, 2),
+                'avg_lead_time_days': round(avg_lead_time, 2)
+            },
+            'quality_rating': supplier_rating
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting supplier performance: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting supplier performance: {str(e)}")
+
+
+@app.get("/suppliers/performance/comparison")
+async def compare_supplier_performance(
+    current_user: User = Depends(get_current_user)
+):
+    """Compare performance across all active suppliers"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get all active suppliers
+        cursor.execute("SELECT id, name FROM suppliers WHERE is_active = 1")
+        suppliers = cursor.fetchall()
+
+        comparisons = []
+
+        for supplier in suppliers:
+            # Get basic performance metrics
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_orders,
+                    SUM(CASE WHEN status = 'received' THEN 1 ELSE 0 END) as completed_orders,
+                    SUM(CASE WHEN status = 'received' THEN total_amount ELSE 0 END) as total_spent
+                FROM purchase_orders
+                WHERE supplier_id = ?
+            """, (supplier['id'],))
+
+            stats = cursor.fetchone()
+
+            # Calculate on-time rate
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_on_time
+                FROM purchase_orders
+                WHERE supplier_id = ?
+                    AND status = 'received'
+                    AND actual_delivery_date IS NOT NULL
+                    AND expected_delivery_date IS NOT NULL
+                    AND actual_delivery_date <= expected_delivery_date
+            """, (supplier['id'],))
+
+            on_time_data = cursor.fetchone()
+            on_time_rate = (on_time_data['total_on_time'] / stats['completed_orders'] * 100) if stats['completed_orders'] > 0 else 0
+
+            # Get average price rank
+            cursor.execute("""
+                SELECT COUNT(*) as items_supplied
+                FROM supplier_products
+                WHERE supplier_id = ? AND is_available = 1
+            """, (supplier['id'],))
+
+            items_data = cursor.fetchone()
+
+            # Get supplier rating
+            cursor.execute("SELECT rating FROM suppliers WHERE id = ?", (supplier['id'],))
+            rating_data = cursor.fetchone()
+            rating = rating_data['rating'] if rating_data and rating_data['rating'] else 0
+
+            comparisons.append({
+                'supplier_id': supplier['id'],
+                'supplier_name': supplier['name'],
+                'total_orders': stats['total_orders'],
+                'completed_orders': stats['completed_orders'],
+                'total_spent': round(stats['total_spent'], 2) if stats['total_spent'] else 0,
+                'on_time_delivery_rate': round(on_time_rate, 2),
+                'items_supplied': items_data['items_supplied'],
+                'quality_rating': rating,
+                'avg_order_value': round(stats['total_spent'] / stats['completed_orders'], 2) if stats['completed_orders'] > 0 else 0
+            })
+
+        # Sort by total spent (highest first)
+        comparisons.sort(key=lambda x: x['total_spent'], reverse=True)
+
+        conn.close()
+        return comparisons
+
+    except Exception as e:
+        logging.error(f"Error comparing supplier performance: {e}")
+        raise HTTPException(status_code=500, detail=f"Error comparing supplier performance: {str(e)}")
+
+# ============================================================================
 # Health Check
 # ============================================================================
 
