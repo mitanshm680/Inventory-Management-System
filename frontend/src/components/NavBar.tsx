@@ -36,6 +36,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import SearchIcon from '@mui/icons-material/Search';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import AnalyticsIcon from '@mui/icons-material/Analytics';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAppMode } from '../contexts/AppModeContext';
@@ -96,6 +97,7 @@ const NavBar: React.FC = () => {
     { text: 'Batches', icon: <QrCodeIcon />, path: '/batches', requiredRole: 'viewer', advancedOnly: true },
     { text: 'Stock Adjustments', icon: <HistoryIcon />, path: '/stock-adjustments', requiredRole: 'editor' },
     { text: 'Purchase Orders', icon: <ShoppingCartIcon />, path: '/purchase-orders', requiredRole: 'editor' },
+    { text: 'Forecasting', icon: <TrendingUpIcon />, path: '/forecasting', requiredRole: 'viewer' },
     { text: 'Analytics', icon: <AnalyticsIcon />, path: '/analytics', requiredRole: 'viewer' },
     { text: 'Price Management', icon: <PriceChangeIcon />, path: '/prices', requiredRole: 'viewer', advancedOnly: true },
     { text: 'Reports', icon: <AssessmentIcon />, path: '/reports', requiredRole: 'viewer' },
