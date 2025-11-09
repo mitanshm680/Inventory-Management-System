@@ -19,6 +19,7 @@ import Suppliers from './pages/Suppliers';
 import Locations from './pages/Locations';
 import Batches from './pages/Batches';
 import StockAdjustments from './pages/StockAdjustments';
+import PurchaseOrders from './pages/PurchaseOrders';
 // Removed: SupplierProducts and SupplierLocations - now part of Suppliers page with tabs
 
 // Hooks
@@ -154,6 +155,16 @@ const App: React.FC = () => {
             <ProtectedRoute requiredRoles={['admin', 'editor']}>
               <MainLayout>
                 <StockAdjustments />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/purchase-orders"
+          element={
+            <ProtectedRoute requiredRoles={['admin', 'editor']}>
+              <MainLayout>
+                <PurchaseOrders />
               </MainLayout>
             </ProtectedRoute>
           }

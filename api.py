@@ -2903,6 +2903,455 @@ async def generate_print_label(
         raise HTTPException(status_code=500, detail=f"Error generating label: {str(e)}")
 
 # ============================================================================
+# PURCHASE ORDER ENDPOINTS
+# ============================================================================
+
+class PurchaseOrderItem(BaseModel):
+    item_name: str
+    quantity: int
+    unit_price: float
+    notes: Optional[str] = None
+
+class PurchaseOrder(BaseModel):
+    supplier_id: int
+    location_id: Optional[int] = None
+    order_date: Optional[str] = None
+    expected_delivery_date: Optional[str] = None
+    status: str = 'pending'  # pending, confirmed, shipped, received, cancelled
+    items: List[PurchaseOrderItem]
+    notes: Optional[str] = None
+
+@app.post("/purchase-orders")
+async def create_purchase_order(
+    po: PurchaseOrder,
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Create a new purchase order"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Validate supplier
+        cursor.execute("SELECT name FROM suppliers WHERE id = ?", (po.supplier_id,))
+        supplier = cursor.fetchone()
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+
+        # Calculate total
+        total_amount = sum(item.quantity * item.unit_price for item in po.items)
+
+        # Create purchase order
+        order_number = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        order_date = po.order_date or datetime.now().isoformat()
+
+        cursor.execute(
+            """INSERT INTO purchase_orders
+               (order_number, supplier_id, location_id, order_date, expected_delivery_date,
+                status, total_amount, created_by, created_at, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (order_number, po.supplier_id, po.location_id, order_date,
+             po.expected_delivery_date, po.status, total_amount,
+             current_user.username, datetime.now().isoformat(), po.notes)
+        )
+
+        po_id = cursor.lastrowid
+
+        # Add line items
+        for item in po.items:
+            cursor.execute(
+                """INSERT INTO purchase_order_items
+                   (po_id, item_name, quantity, unit_price, total_price, notes)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (po_id, item.item_name, item.quantity, item.unit_price,
+                 item.quantity * item.unit_price, item.notes)
+            )
+
+        # Log to history
+        cursor.execute(
+            """INSERT INTO history (action, item_name, user, timestamp, notes)
+               VALUES (?, ?, ?, ?, ?)""",
+            ('purchase_order_created', 'Multiple Items', current_user.username,
+             datetime.now().isoformat(), f"PO: {order_number}, Supplier: {supplier[0]}")
+        )
+
+        conn.commit()
+        conn.close()
+
+        logging.info(f"Purchase order created: {order_number}")
+
+        return {
+            "status": "success",
+            "order_number": order_number,
+            "po_id": po_id,
+            "total_amount": total_amount
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating purchase order: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating purchase order: {str(e)}")
+
+@app.get("/purchase-orders")
+async def get_purchase_orders(
+    status: Optional[str] = None,
+    supplier_id: Optional[int] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get purchase orders"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT po.*, s.name as supplier_name, l.name as location_name
+            FROM purchase_orders po
+            LEFT JOIN suppliers s ON po.supplier_id = s.id
+            LEFT JOIN locations l ON po.location_id = l.id
+            WHERE 1=1
+        """
+        params = []
+
+        if status:
+            query += " AND po.status = ?"
+            params.append(status)
+
+        if supplier_id:
+            query += " AND po.supplier_id = ?"
+            params.append(supplier_id)
+
+        query += " ORDER BY po.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        orders = cursor.fetchall()
+
+        # Get items for each order
+        result = []
+        for order in orders:
+            cursor.execute(
+                """SELECT * FROM purchase_order_items WHERE po_id = ?""",
+                (order[0],)
+            )
+            items = cursor.fetchall()
+
+            result.append({
+                "id": order[0],
+                "order_number": order[1],
+                "supplier_id": order[2],
+                "supplier_name": order[-2],
+                "location_id": order[3],
+                "location_name": order[-1],
+                "order_date": order[4],
+                "expected_delivery_date": order[5],
+                "actual_delivery_date": order[6],
+                "status": order[7],
+                "total_amount": order[8],
+                "created_by": order[9],
+                "created_at": order[10],
+                "updated_at": order[11],
+                "notes": order[12],
+                "items": [
+                    {
+                        "id": item[0],
+                        "item_name": item[2],
+                        "quantity": item[3],
+                        "unit_price": item[4],
+                        "total_price": item[5],
+                        "received_quantity": item[6],
+                        "notes": item[7]
+                    }
+                    for item in items
+                ]
+            })
+
+        conn.close()
+        return {"purchase_orders": result}
+
+    except Exception as e:
+        logging.error(f"Error fetching purchase orders: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching purchase orders: {str(e)}")
+
+@app.put("/purchase-orders/{po_id}/status")
+async def update_purchase_order_status(
+    po_id: int,
+    status: str,
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Update purchase order status"""
+    try:
+        valid_statuses = ['pending', 'confirmed', 'shipped', 'received', 'cancelled']
+        if status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """UPDATE purchase_orders
+               SET status = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, datetime.now().isoformat(), po_id)
+        )
+
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Purchase order not found")
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "success", "new_status": status}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating purchase order status: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating status: {str(e)}")
+
+@app.post("/purchase-orders/{po_id}/receive")
+async def receive_purchase_order(
+    po_id: int,
+    received_items: List[dict],  # [{"item_name": "...", "quantity": int}]
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Receive items from a purchase order and update inventory"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get PO details
+        cursor.execute("SELECT * FROM purchase_orders WHERE id = ?", (po_id,))
+        po = cursor.fetchone()
+        if not po:
+            raise HTTPException(status_code=404, detail="Purchase order not found")
+
+        # Update inventory for received items
+        for item in received_items:
+            item_name = item['item_name']
+            quantity = item['quantity']
+
+            # Update main inventory
+            cursor.execute(
+                """UPDATE items SET quantity = quantity + ?, updated_at = ?
+                   WHERE item_name = ?""",
+                (quantity, datetime.now().isoformat(), item_name)
+            )
+
+            # Update received quantity in PO items
+            cursor.execute(
+                """UPDATE purchase_order_items
+                   SET received_quantity = COALESCE(received_quantity, 0) + ?
+                   WHERE po_id = ? AND item_name = ?""",
+                (quantity, po_id, item_name)
+            )
+
+            # Log to history
+            cursor.execute(
+                """INSERT INTO history (action, item_name, quantity, user, timestamp, notes)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                ('received_from_po', item_name, quantity, current_user.username,
+                 datetime.now().isoformat(), f"PO ID: {po_id}")
+            )
+
+        # Update PO status
+        cursor.execute(
+            """UPDATE purchase_orders
+               SET status = 'received', actual_delivery_date = ?, updated_at = ?
+               WHERE id = ?""",
+            (datetime.now().isoformat(), datetime.now().isoformat(), po_id)
+        )
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "success", "message": "Items received and inventory updated"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error receiving purchase order: {e}")
+        raise HTTPException(status_code=500, detail=f"Error receiving PO: {str(e)}")
+
+# ============================================================================
+# STOCK TRANSFER ENDPOINTS
+# ============================================================================
+
+class StockTransfer(BaseModel):
+    item_name: str
+    from_location_id: int
+    to_location_id: int
+    quantity: int
+    transfer_date: Optional[str] = None
+    notes: Optional[str] = None
+    transferred_by: Optional[str] = None
+
+@app.post("/stock-transfers")
+async def create_stock_transfer(
+    transfer: StockTransfer,
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Transfer stock between locations"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Validate locations
+        cursor.execute("SELECT id, name FROM locations WHERE id IN (?, ?)",
+                      (transfer.from_location_id, transfer.to_location_id))
+        locations = cursor.fetchall()
+
+        if len(locations) != 2:
+            raise HTTPException(status_code=404, detail="One or both locations not found")
+
+        # Check stock at source location
+        cursor.execute(
+            """SELECT quantity FROM item_locations
+               WHERE item_name = ? AND location_id = ?""",
+            (transfer.item_name, transfer.from_location_id)
+        )
+        source_stock = cursor.fetchone()
+
+        if not source_stock or source_stock[0] < transfer.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient stock at source location. Available: {source_stock[0] if source_stock else 0}"
+            )
+
+        # Update source location
+        new_source_qty = source_stock[0] - transfer.quantity
+        cursor.execute(
+            """UPDATE item_locations SET quantity = ?, updated_at = ?
+               WHERE item_name = ? AND location_id = ?""",
+            (new_source_qty, datetime.now().isoformat(), transfer.item_name, transfer.from_location_id)
+        )
+
+        # Update or insert destination location
+        cursor.execute(
+            """SELECT quantity FROM item_locations
+               WHERE item_name = ? AND location_id = ?""",
+            (transfer.item_name, transfer.to_location_id)
+        )
+        dest_stock = cursor.fetchone()
+
+        if dest_stock:
+            new_dest_qty = dest_stock[0] + transfer.quantity
+            cursor.execute(
+                """UPDATE item_locations SET quantity = ?, updated_at = ?
+                   WHERE item_name = ? AND location_id = ?""",
+                (new_dest_qty, datetime.now().isoformat(), transfer.item_name, transfer.to_location_id)
+            )
+        else:
+            cursor.execute(
+                """INSERT INTO item_locations (item_name, location_id, quantity, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (transfer.item_name, transfer.to_location_id, transfer.quantity,
+                 datetime.now().isoformat(), datetime.now().isoformat())
+            )
+
+        # Log the transfer in stock adjustments
+        cursor.execute(
+            """INSERT INTO stock_adjustments
+               (item_name, adjustment_type, quantity, reason, location_id, reference_number, notes, adjusted_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (transfer.item_name, 'subtraction', transfer.quantity, 'transfer',
+             transfer.from_location_id, f"Transfer to Location {transfer.to_location_id}",
+             transfer.notes, current_user.username, datetime.now().isoformat())
+        )
+
+        cursor.execute(
+            """INSERT INTO stock_adjustments
+               (item_name, adjustment_type, quantity, reason, location_id, reference_number, notes, adjusted_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (transfer.item_name, 'addition', transfer.quantity, 'transfer',
+             transfer.to_location_id, f"Transfer from Location {transfer.from_location_id}",
+             transfer.notes, current_user.username, datetime.now().isoformat())
+        )
+
+        # Log to history
+        cursor.execute(
+            """INSERT INTO history (action, item_name, quantity, user, timestamp, notes)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ('transfer', transfer.item_name, transfer.quantity, current_user.username,
+             datetime.now().isoformat(),
+             f"From Location {transfer.from_location_id} to {transfer.to_location_id}")
+        )
+
+        conn.commit()
+        conn.close()
+
+        logging.info(f"Stock transfer completed: {transfer.item_name}, {transfer.quantity} units from {transfer.from_location_id} to {transfer.to_location_id}")
+
+        return {
+            "status": "success",
+            "message": "Stock transferred successfully",
+            "transfer": transfer.dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error transferring stock: {e}")
+        raise HTTPException(status_code=500, detail=f"Error transferring stock: {str(e)}")
+
+@app.get("/stock-transfers")
+async def get_stock_transfers(
+    item_name: Optional[str] = None,
+    location_id: Optional[int] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get stock transfer history"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT sa.*, l.name as location_name
+            FROM stock_adjustments sa
+            LEFT JOIN locations l ON sa.location_id = l.id
+            WHERE sa.reason = 'transfer'
+        """
+        params = []
+
+        if item_name:
+            query += " AND sa.item_name = ?"
+            params.append(item_name)
+
+        if location_id:
+            query += " AND sa.location_id = ?"
+            params.append(location_id)
+
+        query += " ORDER BY sa.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        transfers = cursor.fetchall()
+        conn.close()
+
+        return {
+            "transfers": [
+                {
+                    "id": t[0],
+                    "item_name": t[1],
+                    "adjustment_type": t[2],
+                    "quantity": t[3],
+                    "location_id": t[5],
+                    "location_name": t[-1],
+                    "reference_number": t[7],
+                    "notes": t[8],
+                    "adjusted_by": t[9],
+                    "created_at": t[11]
+                }
+                for t in transfers
+            ]
+        }
+
+    except Exception as e:
+        logging.error(f"Error fetching stock transfers: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching stock transfers: {str(e)}")
+
+# ============================================================================
 # NOTES/COMMENTS ENDPOINTS
 # ============================================================================
 

@@ -451,6 +451,35 @@ export class ApiService {
         const response = await this.api.delete(`/supplier-locations/${id}`);
         return response.data;
     }
+
+    // Purchase Orders
+    async createPurchaseOrder(data: any): Promise<any> {
+        const response = await this.api.post('/purchase-orders', data);
+        return response.data;
+    }
+
+    async getPurchaseOrders(status?: string, supplierId?: number): Promise<any> {
+        const params: any = {};
+        if (status) params.status = status;
+        if (supplierId) params.supplier_id = supplierId;
+        const response = await this.api.get('/purchase-orders', { params });
+        return response.data;
+    }
+
+    async getPurchaseOrder(poId: number): Promise<any> {
+        const response = await this.api.get(`/purchase-orders/${poId}`);
+        return response.data;
+    }
+
+    async updatePurchaseOrderStatus(poId: number, status: string): Promise<any> {
+        const response = await this.api.put(`/purchase-orders/${poId}/status`, { status });
+        return response.data;
+    }
+
+    async receivePurchaseOrder(poId: number, items: any[]): Promise<any> {
+        const response = await this.api.post(`/purchase-orders/${poId}/receive`, { items });
+        return response.data;
+    }
 }
 
 export const apiService = new ApiService(); 
