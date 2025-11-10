@@ -12,12 +12,6 @@ import {
   DialogContent,
   DialogTitle,
   Grid,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TablePagination,
   CircularProgress,
   Snackbar,
@@ -31,7 +25,6 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import GroupsIcon from '@mui/icons-material/Groups';
 import { useAuth } from '../contexts/AuthContext';
-import { Group } from '../types';
 import { apiService } from '../services/api';
 
 interface ExtendedGroup {

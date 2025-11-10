@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { API_CONFIG, AUTH_CONFIG } from '../config';
 
 export class ApiService {
@@ -276,6 +276,24 @@ export class ApiService {
         return response.data;
     }
 
+    async exportToExcel(groups?: string[]): Promise<Blob> {
+        const params = groups ? { groups: groups.join(',') } : {};
+        const response = await this.api.get('/export/excel', {
+            params,
+            responseType: 'blob'
+        });
+        return response.data;
+    }
+
+    async exportToPDF(groups?: string[]): Promise<Blob> {
+        const params = groups ? { groups: groups.join(',') } : {};
+        const response = await this.api.get('/export/pdf', {
+            params,
+            responseType: 'blob'
+        });
+        return response.data;
+    }
+
     // Locations
     async getLocations(activeOnly: boolean = false): Promise<any> {
         const params = activeOnly ? { active_only: true } : {};
@@ -431,6 +449,98 @@ export class ApiService {
 
     async deleteSupplierLocation(id: number): Promise<any> {
         const response = await this.api.delete(`/supplier-locations/${id}`);
+        return response.data;
+    }
+
+    // Purchase Orders
+    async createPurchaseOrder(data: any): Promise<any> {
+        const response = await this.api.post('/purchase-orders', data);
+        return response.data;
+    }
+
+    async getPurchaseOrders(status?: string, supplierId?: number): Promise<any> {
+        const params: any = {};
+        if (status) params.status = status;
+        if (supplierId) params.supplier_id = supplierId;
+        const response = await this.api.get('/purchase-orders', { params });
+        return response.data;
+    }
+
+    async getPurchaseOrder(poId: number): Promise<any> {
+        const response = await this.api.get(`/purchase-orders/${poId}`);
+        return response.data;
+    }
+
+    async updatePurchaseOrderStatus(poId: number, status: string): Promise<any> {
+        const response = await this.api.put(`/purchase-orders/${poId}/status`, { status });
+        return response.data;
+    }
+
+    async receivePurchaseOrder(poId: number, items: any[]): Promise<any> {
+        const response = await this.api.post(`/purchase-orders/${poId}/receive`, { items });
+        return response.data;
+    }
+
+    // Analytics
+    async getFinancialSummary(startDate?: string, endDate?: string): Promise<any> {
+        const params: any = {};
+        if (startDate) params.start_date = startDate;
+        if (endDate) params.end_date = endDate;
+        const response = await this.api.get('/analytics/financial-summary', { params });
+        return response.data;
+    }
+
+    async getInventoryValueBreakdown(): Promise<any> {
+        const response = await this.api.get('/analytics/inventory-value');
+        return response.data;
+    }
+
+    async getTopItems(metric: string = 'value', limit: number = 10): Promise<any> {
+        const response = await this.api.get('/analytics/top-items', {
+            params: { metric, limit }
+        });
+        return response.data;
+    }
+
+    async getRevenueByPeriod(period: string = 'daily', limit: number = 30): Promise<any> {
+        const response = await this.api.get('/analytics/revenue-by-period', {
+            params: { period, limit }
+        });
+        return response.data;
+    }
+
+    async getCostAnalysis(): Promise<any> {
+        const response = await this.api.get('/analytics/cost-analysis');
+        return response.data;
+    }
+
+    async getProfitMargins(): Promise<any> {
+        const response = await this.api.get('/analytics/profit-margins');
+        return response.data;
+    }
+
+    // Forecasting
+    async getDemandPrediction(itemName?: string, daysAhead: number = 30): Promise<any> {
+        const params: any = { days_ahead: daysAhead };
+        if (itemName) params.item_name = itemName;
+        const response = await this.api.get('/forecasting/demand-prediction', { params });
+        return response.data;
+    }
+
+    async getReorderRecommendations(): Promise<any> {
+        const response = await this.api.get('/forecasting/reorder-recommendations');
+        return response.data;
+    }
+
+    async getStockTrends(itemName?: string, days: number = 30): Promise<any> {
+        const params: any = { days };
+        if (itemName) params.item_name = itemName;
+        const response = await this.api.get('/forecasting/stock-trends', { params });
+        return response.data;
+    }
+
+    async getSeasonalAnalysis(): Promise<any> {
+        const response = await this.api.get('/forecasting/seasonal-analysis');
         return response.data;
     }
 }

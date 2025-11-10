@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Paper,
@@ -78,14 +78,7 @@ const Batches: React.FC = () => {
     notes: ''
   });
 
-  useEffect(() => {
-    fetchBatches();
-    fetchItems();
-    fetchLocations();
-    fetchSuppliers();
-  }, [statusFilter]);
-
-  const fetchBatches = async () => {
+  const fetchBatches = useCallback(async () => {
     try {
       setLoading(true);
       const filters = statusFilter !== 'all' ? { status: statusFilter } : {};
@@ -98,7 +91,15 @@ const Batches: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter]);
+
+  useEffect(() => {
+    fetchBatches();
+    fetchItems();
+    fetchLocations();
+    fetchSuppliers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchBatches]);
 
   const fetchItems = async () => {
     try {

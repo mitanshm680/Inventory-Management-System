@@ -34,8 +34,10 @@ import WarehouseIcon from '@mui/icons-material/Warehouse';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import HistoryIcon from '@mui/icons-material/History';
 import SearchIcon from '@mui/icons-material/Search';
-import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
-import MapIcon from '@mui/icons-material/Map';
+import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
+import AnalyticsIcon from '@mui/icons-material/Analytics';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import HistoryEduIcon from '@mui/icons-material/HistoryEdu';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAppMode } from '../contexts/AppModeContext';
@@ -95,10 +97,14 @@ const NavBar: React.FC = () => {
     { text: 'Locations', icon: <WarehouseIcon />, path: '/locations', requiredRole: 'editor', advancedOnly: true },
     { text: 'Batches', icon: <QrCodeIcon />, path: '/batches', requiredRole: 'viewer', advancedOnly: true },
     { text: 'Stock Adjustments', icon: <HistoryIcon />, path: '/stock-adjustments', requiredRole: 'editor' },
+    { text: 'Purchase Orders', icon: <ShoppingCartIcon />, path: '/purchase-orders', requiredRole: 'editor' },
+    { text: 'Forecasting', icon: <TrendingUpIcon />, path: '/forecasting', requiredRole: 'viewer' },
+    { text: 'Analytics', icon: <AnalyticsIcon />, path: '/analytics', requiredRole: 'viewer' },
     { text: 'Price Management', icon: <PriceChangeIcon />, path: '/prices', requiredRole: 'viewer', advancedOnly: true },
     { text: 'Reports', icon: <AssessmentIcon />, path: '/reports', requiredRole: 'viewer' },
     { text: 'Groups', icon: <CategoryIcon />, path: '/groups', requiredRole: 'editor', advancedOnly: true },
     { text: 'User Management', icon: <GroupIcon />, path: '/users', requiredRole: 'admin', advancedOnly: true },
+    { text: 'Audit Log', icon: <HistoryEduIcon />, path: '/audit-log', requiredRole: 'admin', advancedOnly: true },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings', requiredRole: 'admin' },
   ];
 

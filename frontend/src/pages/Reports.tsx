@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Typography,
@@ -67,11 +67,7 @@ const Reports: React.FC = () => {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [threshold, setThreshold] = useState(10);
 
-  useEffect(() => {
-    fetchReports();
-  }, [threshold]);
-
-  const fetchReports = async () => {
+  const fetchReports = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -92,7 +88,11 @@ const Reports: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [threshold]);
+
+  useEffect(() => {
+    fetchReports();
+  }, [fetchReports]);
 
   const handleExportCSV = async () => {
     try {
@@ -115,6 +115,48 @@ const Reports: React.FC = () => {
     }
   };
 
+  const handleExportExcel = async () => {
+    try {
+      if (user?.role !== 'admin') {
+        alert('Only admins can export data');
+        return;
+      }
+      const blob = await apiService.exportToExcel();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `inventory_report_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting Excel:', err);
+      alert('Failed to export Excel');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      if (user?.role !== 'admin') {
+        alert('Only admins can export data');
+        return;
+      }
+      const blob = await apiService.exportToPDF();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `inventory_report_${new Date().toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting PDF:', err);
+      alert('Failed to export PDF');
+    }
+  };
+
   if (loading) {
     return (
       <Container>
@@ -131,13 +173,32 @@ const Reports: React.FC = () => {
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h4">Reports & Analytics</Typography>
           {user?.role === 'admin' && (
-            <Button
-              variant="contained"
-              startIcon={<DownloadIcon />}
-              onClick={handleExportCSV}
-            >
-              Export CSV
-            </Button>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={handleExportCSV}
+              >
+                CSV
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={handleExportExcel}
+              >
+                Excel
+              </Button>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={handleExportPDF}
+              >
+                PDF
+              </Button>
+            </Box>
           )}
         </Box>
 

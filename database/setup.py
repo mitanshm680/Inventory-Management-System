@@ -380,6 +380,119 @@ def setup_database():
                 ON supplier_products(unit_price)
             """)
 
+            # Create purchase_orders table (for managing purchase orders)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS purchase_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_number TEXT UNIQUE NOT NULL,
+                    supplier_id INTEGER NOT NULL,
+                    location_id INTEGER,
+                    order_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    expected_delivery_date DATE,
+                    actual_delivery_date DATE,
+                    status TEXT CHECK(status IN ('pending', 'confirmed', 'shipped', 'received', 'cancelled')) DEFAULT 'pending',
+                    total_amount REAL NOT NULL CHECK(total_amount >= 0),
+                    shipping_cost REAL DEFAULT 0,
+                    tax_amount REAL DEFAULT 0,
+                    notes TEXT,
+                    created_by TEXT NOT NULL,
+                    approved_by TEXT,
+                    received_by TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL
+                )
+            """)
+
+            # Create purchase_order_items table (line items for each purchase order)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS purchase_order_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    po_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    unit_price REAL NOT NULL CHECK(unit_price >= 0),
+                    total_price REAL NOT NULL CHECK(total_price >= 0),
+                    received_quantity INTEGER DEFAULT 0 CHECK(received_quantity >= 0),
+                    notes TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (po_id) REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                    FOREIGN KEY (item_name) REFERENCES items(item_name) ON DELETE RESTRICT
+                )
+            """)
+
+            # Create indexes for purchase orders
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier
+                ON purchase_orders(supplier_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_purchase_orders_status
+                ON purchase_orders(status)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_purchase_orders_date
+                ON purchase_orders(order_date DESC)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po
+                ON purchase_order_items(po_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_purchase_order_items_item
+                ON purchase_order_items(item_name)
+            """)
+
+            # Create audit_log table (for tracking all important actions)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action_type TEXT NOT NULL CHECK(action_type IN (
+                        'create', 'update', 'delete', 'login', 'logout',
+                        'export', 'import', 'approve', 'reject', 'transfer', 'adjust'
+                    )),
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT,
+                    entity_name TEXT,
+                    user_name TEXT NOT NULL,
+                    user_role TEXT,
+                    description TEXT,
+                    old_values TEXT,
+                    new_values TEXT,
+                    ip_address TEXT,
+                    user_agent TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    success INTEGER DEFAULT 1,
+                    error_message TEXT
+                )
+            """)
+
+            # Create indexes for audit_log
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_user
+                ON audit_log(user_name)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp
+                ON audit_log(timestamp DESC)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_entity
+                ON audit_log(entity_type, entity_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_log_action
+                ON audit_log(action_type)
+            """)
+
             # Add coordinates to locations for distance calculations
             cursor.execute("""
                 SELECT COUNT(*) FROM pragma_table_info('locations')

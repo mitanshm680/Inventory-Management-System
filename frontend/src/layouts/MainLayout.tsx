@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { Box, Container, useMediaQuery, useTheme } from '@mui/material';
+import { Box, Container, useTheme } from '@mui/material';
 import NavBar from '../components/NavBar';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -13,7 +13,6 @@ interface MainLayoutProps {
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const { user } = useAuth();
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   
   return (
     <Box

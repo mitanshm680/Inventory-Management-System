@@ -21,9 +21,6 @@ import ErrorIcon from '@mui/icons-material/Error';
 import InfoIcon from '@mui/icons-material/Info';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloseIcon from '@mui/icons-material/Close';
-import InventoryIcon from '@mui/icons-material/Inventory';
-import EventIcon from '@mui/icons-material/Event';
-import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import { apiService } from '../services/api';
 
 interface AlertType {
@@ -43,7 +40,7 @@ interface AlertType {
 
 const AlertsPanel: React.FC = () => {
   const [alerts, setAlerts] = useState<AlertType[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -82,21 +79,6 @@ const AlertsPanel: React.FC = () => {
       fetchAlerts();
     } catch (err) {
       console.error('Failed to resolve alert:', err);
-    }
-  };
-
-  const getAlertIcon = (alertType: string) => {
-    switch (alertType) {
-      case 'low_stock':
-      case 'reorder':
-        return <InventoryIcon />;
-      case 'expiring_soon':
-      case 'expired':
-        return <EventIcon />;
-      case 'batch_recall':
-        return <LocalShippingIcon />;
-      default:
-        return <InfoIcon />;
     }
   };
 

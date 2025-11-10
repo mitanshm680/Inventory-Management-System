@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Paper,
@@ -27,8 +27,7 @@ import {
   FormControl,
   InputLabel,
   Select,
-  MenuItem,
-  Tooltip
+  MenuItem
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -37,7 +36,6 @@ import SearchIcon from '@mui/icons-material/Search';
 import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import InventoryIcon from '@mui/icons-material/Inventory';
 import LocationOnIcon from '@mui/icons-material/LocationOn';
-import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { apiService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -107,7 +105,7 @@ const Suppliers: React.FC = () => {
   const [supplierDialogOpen, setSupplierDialogOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [showActiveOnly, setShowActiveOnly] = useState(true);
+  const [showActiveOnly] = useState(true);
 
   // Product management
   const [productDialogOpen, setProductDialogOpen] = useState(false);
@@ -164,11 +162,27 @@ const Suppliers: React.FC = () => {
     notes: ''
   });
 
-  useEffect(() => {
-    fetchData();
-  }, [currentTab, showActiveOnly]);
+  const fetchSupplierProducts = async (supplierId: number) => {
+    try {
+      const products = await apiService.getSupplierProducts(supplierId);
+      setSupplierProducts(products);
+    } catch (err) {
+      console.error('Failed to fetch supplier products:', err);
+      setSupplierProducts([]);
+    }
+  };
 
-  const fetchData = async () => {
+  const fetchSupplierLocations = async (supplierId: number) => {
+    try {
+      const locations = await apiService.getSupplierLocations(supplierId);
+      setSupplierLocations(locations);
+    } catch (err) {
+      console.error('Failed to fetch supplier locations:', err);
+      setSupplierLocations([]);
+    }
+  };
+
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
 
@@ -208,27 +222,12 @@ const Suppliers: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTab, showActiveOnly]);
 
-  const fetchSupplierProducts = async (supplierId: number) => {
-    try {
-      const products = await apiService.getSupplierProducts(supplierId);
-      setSupplierProducts(products);
-    } catch (err) {
-      console.error('Failed to fetch supplier products:', err);
-      setSupplierProducts([]);
-    }
-  };
-
-  const fetchSupplierLocations = async (supplierId: number) => {
-    try {
-      const locations = await apiService.getSupplierLocations(supplierId);
-      setSupplierLocations(locations);
-    } catch (err) {
-      console.error('Failed to fetch supplier locations:', err);
-      setSupplierLocations([]);
-    }
-  };
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setCurrentTab(newValue);

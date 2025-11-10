@@ -2412,6 +2412,96 @@ async def import_inventory_csv(
         logging.error(f"Error importing CSV: {e}")
         raise HTTPException(status_code=500, detail=f"Error importing CSV: {str(e)}")
 
+@app.post("/import/excel")
+async def import_inventory_excel(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Import inventory items from Excel file"""
+    try:
+        from openpyxl import load_workbook
+        from io import BytesIO
+
+        # Read file content
+        content = await file.read()
+        workbook = load_workbook(BytesIO(content))
+        sheet = workbook.active
+
+        imported = []
+        updated = []
+        failed = []
+
+        # Get headers from first row
+        headers = [cell.value for cell in sheet[1]]
+
+        with db_connection.get_cursor() as cursor:
+            for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                try:
+                    # Create dict from row
+                    row_dict = dict(zip(headers, row))
+
+                    item_name = row_dict.get('Item Name') or row_dict.get('item_name')
+                    if not item_name:
+                        failed.append({"row": row_idx, "reason": "Missing item name"})
+                        continue
+
+                    quantity = int(row_dict.get('Quantity', 0))
+                    group_name = row_dict.get('Group') or row_dict.get('group_name')
+                    reorder_level = int(row_dict.get('Reorder Level', 10)) if row_dict.get('Reorder Level') else 10
+                    unit = row_dict.get('Unit', 'units')
+                    location = row_dict.get('Location', '')
+                    description = row_dict.get('Description', '')
+
+                    # Check if item exists
+                    cursor.execute("SELECT 1 FROM items WHERE item_name = ?", (item_name,))
+                    exists = cursor.fetchone()
+
+                    if exists:
+                        # Update existing
+                        cursor.execute(
+                            """UPDATE items SET quantity = ?, group_name = ?, reorder_point = ?,
+                               unit = ?, location = ?, description = ?, updated_at = ?
+                               WHERE item_name = ?""",
+                            (quantity, group_name, reorder_level, unit, location, description,
+                             datetime.now().isoformat(), item_name)
+                        )
+                        updated.append(item_name)
+                    else:
+                        # Insert new
+                        cursor.execute(
+                            """INSERT INTO items
+                               (item_name, quantity, group_name, reorder_point, unit, location, description, created_at, updated_at)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (item_name, quantity, group_name, reorder_level, unit, location, description,
+                             datetime.now().isoformat(), datetime.now().isoformat())
+                        )
+                        imported.append(item_name)
+
+                        # Log to history
+                        cursor.execute(
+                            """INSERT INTO history (action, item_name, quantity, group_name, user, timestamp)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            ('added', item_name, quantity, group_name, current_user.username, datetime.now().isoformat())
+                        )
+
+                except Exception as row_error:
+                    failed.append({"row": row_idx, "reason": str(row_error)})
+                    continue
+
+        logging.info(f"Excel import completed: {len(imported)} imported, {len(updated)} updated, {len(failed)} failed")
+
+        return {
+            "status": "success",
+            "imported": len(imported),
+            "updated": len(updated),
+            "failed": len(failed),
+            "failed_items": failed[:10] if failed else []  # Return first 10 failures
+        }
+
+    except Exception as e:
+        logging.error(f"Error importing Excel: {e}")
+        raise HTTPException(status_code=500, detail=f"Error importing Excel: {str(e)}")
+
 @app.get("/export/csv")
 async def export_inventory_csv(
     groups: Optional[str] = None,
@@ -2434,6 +2524,832 @@ async def export_inventory_csv(
     except Exception as e:
         logging.error(f"Error exporting CSV: {e}")
         raise HTTPException(status_code=500, detail="Error exporting data")
+
+@app.get("/export/excel")
+async def export_inventory_excel(
+    groups: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Export inventory to Excel file (admin only)"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"inventory_export_{timestamp}.xlsx"
+        group_list = groups.split(',') if groups else None
+
+        # Get inventory data
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        if group_list:
+            placeholders = ','.join('?' * len(group_list))
+            query = f"SELECT * FROM items WHERE group_name IN ({placeholders})"
+            cursor.execute(query, group_list)
+        else:
+            cursor.execute("SELECT * FROM items")
+
+        items = cursor.fetchall()
+
+        # Create workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Inventory"
+
+        # Header style
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+
+        # Add headers
+        headers = ["Item Name", "Quantity", "Group", "Reorder Level", "Unit", "Location", "Description", "Created At"]
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        # Add data
+        for row_num, item in enumerate(items, 2):
+            ws.cell(row=row_num, column=1, value=item[0])  # item_name
+            ws.cell(row=row_num, column=2, value=item[1])  # quantity
+            ws.cell(row=row_num, column=3, value=item[2])  # group_name
+            ws.cell(row=row_num, column=4, value=item[3])  # reorder_point
+            ws.cell(row=row_num, column=5, value=item[4])  # unit
+            ws.cell(row=row_num, column=6, value=item[5])  # location
+            ws.cell(row=row_num, column=7, value=item[6])  # description
+            ws.cell(row=row_num, column=8, value=item[7])  # created_at
+
+        # Auto-size columns
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        # Save file
+        wb.save(filename)
+        conn.close()
+
+        return FileResponse(
+            filename,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            filename=filename
+        )
+    except Exception as e:
+        logging.error(f"Error exporting Excel: {e}")
+        raise HTTPException(status_code=500, detail=f"Error exporting data: {str(e)}")
+
+@app.get("/export/pdf")
+async def export_inventory_pdf(
+    groups: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Export inventory to PDF file (admin only)"""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"inventory_report_{timestamp}.pdf"
+        group_list = groups.split(',') if groups else None
+
+        # Get inventory data
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        if group_list:
+            placeholders = ','.join('?' * len(group_list))
+            query = f"SELECT item_name, quantity, group_name, reorder_point, unit FROM items WHERE group_name IN ({placeholders})"
+            cursor.execute(query, group_list)
+        else:
+            cursor.execute("SELECT item_name, quantity, group_name, reorder_point, unit FROM items")
+
+        items = cursor.fetchall()
+        conn.close()
+
+        # Create PDF
+        doc = SimpleDocTemplate(filename, pagesize=letter)
+        elements = []
+        styles = getSampleStyleSheet()
+
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#1976d2'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        title = Paragraph("Inventory Management Report", title_style)
+        elements.append(title)
+
+        # Subtitle with date
+        subtitle_style = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Normal'],
+            fontSize=12,
+            textColor=colors.grey,
+            spaceAfter=20,
+            alignment=TA_CENTER
+        )
+        subtitle = Paragraph(f"Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", subtitle_style)
+        elements.append(subtitle)
+        elements.append(Spacer(1, 0.3*inch))
+
+        # Summary
+        summary_text = f"Total Items: <b>{len(items)}</b>"
+        summary = Paragraph(summary_text, styles['Normal'])
+        elements.append(summary)
+        elements.append(Spacer(1, 0.2*inch))
+
+        # Table data
+        data = [['Item Name', 'Quantity', 'Group', 'Reorder Level', 'Unit']]
+        for item in items:
+            data.append([
+                item[0] or '',
+                str(item[1]) if item[1] is not None else '0',
+                item[2] or 'N/A',
+                str(item[3]) if item[3] is not None else 'N/A',
+                item[4] or 'N/A'
+            ])
+
+        # Create table
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1976d2')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+
+        elements.append(table)
+        doc.build(elements)
+
+        return FileResponse(
+            filename,
+            media_type='application/pdf',
+            filename=filename
+        )
+    except Exception as e:
+        logging.error(f"Error exporting PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Error exporting PDF: {str(e)}")
+
+# ============================================================================
+# QR CODE GENERATION ENDPOINTS
+# ============================================================================
+
+@app.get("/items/{item_name}/qrcode")
+async def generate_item_qrcode(
+    item_name: str,
+    size: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """Generate QR code for an item"""
+    try:
+        import qrcode
+        from io import BytesIO
+
+        # Get item details
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM items WHERE item_name = ?", (item_name,))
+        item = cursor.fetchone()
+        conn.close()
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        # Create QR code data
+        qr_data = {
+            "item_name": item[0],
+            "quantity": item[1],
+            "group": item[2],
+            "reorder_point": item[3],
+        }
+        import json
+        qr_content = json.dumps(qr_data)
+
+        # Generate QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=size,
+            border=4,
+        )
+        qr.add_data(qr_content)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        # Save to bytes
+        img_byte_arr = BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+
+        return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+    except Exception as e:
+        logging.error(f"Error generating QR code: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating QR code: {str(e)}")
+
+@app.get("/items/{item_name}/barcode")
+async def generate_item_barcode(
+    item_name: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Generate barcode for an item (Code128)"""
+    try:
+        from barcode import Code128
+        from barcode.writer import ImageWriter
+        from io import BytesIO
+
+        # Create barcode
+        # Use item name or a unique identifier
+        barcode_data = item_name.replace(" ", "_")[:20]  # Limit length
+
+        barcode = Code128(barcode_data, writer=ImageWriter())
+
+        # Save to bytes
+        img_byte_arr = BytesIO()
+        barcode.write(img_byte_arr)
+        img_byte_arr.seek(0)
+
+        return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="Barcode generation not available. Install python-barcode library."
+        )
+    except Exception as e:
+        logging.error(f"Error generating barcode: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating barcode: {str(e)}")
+
+@app.post("/items/{item_name}/print-label")
+async def generate_print_label(
+    item_name: str,
+    include_qrcode: bool = True,
+    current_user: User = Depends(get_current_user)
+):
+    """Generate printable label with QR code"""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Image
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib import colors
+        import qrcode
+        from io import BytesIO
+
+        # Get item details
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM items WHERE item_name = ?", (item_name,))
+        item = cursor.fetchone()
+        conn.close()
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"label_{item_name}_{timestamp}.pdf"
+
+        # Create PDF
+        doc = SimpleDocTemplate(
+            filename,
+            pagesize=(4*inch, 2*inch),  # Label size
+            topMargin=0.25*inch,
+            bottomMargin=0.25*inch,
+            leftMargin=0.25*inch,
+            rightMargin=0.25*inch
+        )
+        elements = []
+        styles = getSampleStyleSheet()
+
+        if include_qrcode:
+            # Generate QR code
+            import json
+            qr_data = json.dumps({
+                "item_name": item[0],
+                "quantity": item[1],
+                "group": item[2]
+            })
+            qr = qrcode.QRCode(version=1, box_size=10, border=2)
+            qr.add_data(qr_data)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+
+            # Save QR to bytes
+            qr_byte_arr = BytesIO()
+            qr_img.save(qr_byte_arr, format='PNG')
+            qr_byte_arr.seek(0)
+
+            # Create layout
+            data = [
+                [
+                    Image(qr_byte_arr, width=1.2*inch, height=1.2*inch),
+                    [
+                        Paragraph(f"<b>{item[0]}</b>", styles['Heading2']),
+                        Paragraph(f"Qty: {item[1]}", styles['Normal']),
+                        Paragraph(f"Group: {item[2] or 'N/A'}", styles['Normal']),
+                        Paragraph(f"Reorder: {item[3] or 'N/A'}", styles['Normal']),
+                    ]
+                ]
+            ]
+        else:
+            data = [
+                [
+                    Paragraph(f"<b>{item[0]}</b>", styles['Heading1']),
+                ],
+                [
+                    Paragraph(f"Quantity: {item[1]}", styles['Normal']),
+                ],
+                [
+                    Paragraph(f"Group: {item[2] or 'N/A'}", styles['Normal']),
+                ]
+            ]
+
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ]))
+
+        elements.append(table)
+        doc.build(elements)
+
+        return FileResponse(filename, media_type='application/pdf', filename=filename)
+    except Exception as e:
+        logging.error(f"Error generating label: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating label: {str(e)}")
+
+# ============================================================================
+# PURCHASE ORDER ENDPOINTS
+# ============================================================================
+
+class PurchaseOrderItem(BaseModel):
+    item_name: str
+    quantity: int
+    unit_price: float
+    notes: Optional[str] = None
+
+class PurchaseOrder(BaseModel):
+    supplier_id: int
+    location_id: Optional[int] = None
+    order_date: Optional[str] = None
+    expected_delivery_date: Optional[str] = None
+    status: str = 'pending'  # pending, confirmed, shipped, received, cancelled
+    items: List[PurchaseOrderItem]
+    notes: Optional[str] = None
+
+@app.post("/purchase-orders")
+async def create_purchase_order(
+    po: PurchaseOrder,
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Create a new purchase order"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Validate supplier
+        cursor.execute("SELECT name FROM suppliers WHERE id = ?", (po.supplier_id,))
+        supplier = cursor.fetchone()
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+
+        # Calculate total
+        total_amount = sum(item.quantity * item.unit_price for item in po.items)
+
+        # Create purchase order
+        order_number = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        order_date = po.order_date or datetime.now().isoformat()
+
+        cursor.execute(
+            """INSERT INTO purchase_orders
+               (order_number, supplier_id, location_id, order_date, expected_delivery_date,
+                status, total_amount, created_by, created_at, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (order_number, po.supplier_id, po.location_id, order_date,
+             po.expected_delivery_date, po.status, total_amount,
+             current_user.username, datetime.now().isoformat(), po.notes)
+        )
+
+        po_id = cursor.lastrowid
+
+        # Add line items
+        for item in po.items:
+            cursor.execute(
+                """INSERT INTO purchase_order_items
+                   (po_id, item_name, quantity, unit_price, total_price, notes)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (po_id, item.item_name, item.quantity, item.unit_price,
+                 item.quantity * item.unit_price, item.notes)
+            )
+
+        # Log to history
+        cursor.execute(
+            """INSERT INTO history (action, item_name, user, timestamp, notes)
+               VALUES (?, ?, ?, ?, ?)""",
+            ('purchase_order_created', 'Multiple Items', current_user.username,
+             datetime.now().isoformat(), f"PO: {order_number}, Supplier: {supplier[0]}")
+        )
+
+        conn.commit()
+        conn.close()
+
+        logging.info(f"Purchase order created: {order_number}")
+
+        return {
+            "status": "success",
+            "order_number": order_number,
+            "po_id": po_id,
+            "total_amount": total_amount
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating purchase order: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating purchase order: {str(e)}")
+
+@app.get("/purchase-orders")
+async def get_purchase_orders(
+    status: Optional[str] = None,
+    supplier_id: Optional[int] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get purchase orders"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT po.*, s.name as supplier_name, l.name as location_name
+            FROM purchase_orders po
+            LEFT JOIN suppliers s ON po.supplier_id = s.id
+            LEFT JOIN locations l ON po.location_id = l.id
+            WHERE 1=1
+        """
+        params = []
+
+        if status:
+            query += " AND po.status = ?"
+            params.append(status)
+
+        if supplier_id:
+            query += " AND po.supplier_id = ?"
+            params.append(supplier_id)
+
+        query += " ORDER BY po.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        orders = cursor.fetchall()
+
+        # Get items for each order
+        result = []
+        for order in orders:
+            cursor.execute(
+                """SELECT * FROM purchase_order_items WHERE po_id = ?""",
+                (order[0],)
+            )
+            items = cursor.fetchall()
+
+            result.append({
+                "id": order[0],
+                "order_number": order[1],
+                "supplier_id": order[2],
+                "supplier_name": order[-2],
+                "location_id": order[3],
+                "location_name": order[-1],
+                "order_date": order[4],
+                "expected_delivery_date": order[5],
+                "actual_delivery_date": order[6],
+                "status": order[7],
+                "total_amount": order[8],
+                "created_by": order[9],
+                "created_at": order[10],
+                "updated_at": order[11],
+                "notes": order[12],
+                "items": [
+                    {
+                        "id": item[0],
+                        "item_name": item[2],
+                        "quantity": item[3],
+                        "unit_price": item[4],
+                        "total_price": item[5],
+                        "received_quantity": item[6],
+                        "notes": item[7]
+                    }
+                    for item in items
+                ]
+            })
+
+        conn.close()
+        return {"purchase_orders": result}
+
+    except Exception as e:
+        logging.error(f"Error fetching purchase orders: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching purchase orders: {str(e)}")
+
+@app.put("/purchase-orders/{po_id}/status")
+async def update_purchase_order_status(
+    po_id: int,
+    status: str,
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Update purchase order status"""
+    try:
+        valid_statuses = ['pending', 'confirmed', 'shipped', 'received', 'cancelled']
+        if status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """UPDATE purchase_orders
+               SET status = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, datetime.now().isoformat(), po_id)
+        )
+
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Purchase order not found")
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "success", "new_status": status}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating purchase order status: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating status: {str(e)}")
+
+@app.post("/purchase-orders/{po_id}/receive")
+async def receive_purchase_order(
+    po_id: int,
+    received_items: List[dict],  # [{"item_name": "...", "quantity": int}]
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Receive items from a purchase order and update inventory"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get PO details
+        cursor.execute("SELECT * FROM purchase_orders WHERE id = ?", (po_id,))
+        po = cursor.fetchone()
+        if not po:
+            raise HTTPException(status_code=404, detail="Purchase order not found")
+
+        # Update inventory for received items
+        for item in received_items:
+            item_name = item['item_name']
+            quantity = item['quantity']
+
+            # Update main inventory
+            cursor.execute(
+                """UPDATE items SET quantity = quantity + ?, updated_at = ?
+                   WHERE item_name = ?""",
+                (quantity, datetime.now().isoformat(), item_name)
+            )
+
+            # Update received quantity in PO items
+            cursor.execute(
+                """UPDATE purchase_order_items
+                   SET received_quantity = COALESCE(received_quantity, 0) + ?
+                   WHERE po_id = ? AND item_name = ?""",
+                (quantity, po_id, item_name)
+            )
+
+            # Log to history
+            cursor.execute(
+                """INSERT INTO history (action, item_name, quantity, user, timestamp, notes)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                ('received_from_po', item_name, quantity, current_user.username,
+                 datetime.now().isoformat(), f"PO ID: {po_id}")
+            )
+
+        # Update PO status
+        cursor.execute(
+            """UPDATE purchase_orders
+               SET status = 'received', actual_delivery_date = ?, updated_at = ?
+               WHERE id = ?""",
+            (datetime.now().isoformat(), datetime.now().isoformat(), po_id)
+        )
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "success", "message": "Items received and inventory updated"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error receiving purchase order: {e}")
+        raise HTTPException(status_code=500, detail=f"Error receiving PO: {str(e)}")
+
+# ============================================================================
+# STOCK TRANSFER ENDPOINTS
+# ============================================================================
+
+class StockTransfer(BaseModel):
+    item_name: str
+    from_location_id: int
+    to_location_id: int
+    quantity: int
+    transfer_date: Optional[str] = None
+    notes: Optional[str] = None
+    transferred_by: Optional[str] = None
+
+@app.post("/stock-transfers")
+async def create_stock_transfer(
+    transfer: StockTransfer,
+    current_user: User = Depends(get_admin_or_editor)
+):
+    """Transfer stock between locations"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Validate locations
+        cursor.execute("SELECT id, name FROM locations WHERE id IN (?, ?)",
+                      (transfer.from_location_id, transfer.to_location_id))
+        locations = cursor.fetchall()
+
+        if len(locations) != 2:
+            raise HTTPException(status_code=404, detail="One or both locations not found")
+
+        # Check stock at source location
+        cursor.execute(
+            """SELECT quantity FROM item_locations
+               WHERE item_name = ? AND location_id = ?""",
+            (transfer.item_name, transfer.from_location_id)
+        )
+        source_stock = cursor.fetchone()
+
+        if not source_stock or source_stock[0] < transfer.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient stock at source location. Available: {source_stock[0] if source_stock else 0}"
+            )
+
+        # Update source location
+        new_source_qty = source_stock[0] - transfer.quantity
+        cursor.execute(
+            """UPDATE item_locations SET quantity = ?, updated_at = ?
+               WHERE item_name = ? AND location_id = ?""",
+            (new_source_qty, datetime.now().isoformat(), transfer.item_name, transfer.from_location_id)
+        )
+
+        # Update or insert destination location
+        cursor.execute(
+            """SELECT quantity FROM item_locations
+               WHERE item_name = ? AND location_id = ?""",
+            (transfer.item_name, transfer.to_location_id)
+        )
+        dest_stock = cursor.fetchone()
+
+        if dest_stock:
+            new_dest_qty = dest_stock[0] + transfer.quantity
+            cursor.execute(
+                """UPDATE item_locations SET quantity = ?, updated_at = ?
+                   WHERE item_name = ? AND location_id = ?""",
+                (new_dest_qty, datetime.now().isoformat(), transfer.item_name, transfer.to_location_id)
+            )
+        else:
+            cursor.execute(
+                """INSERT INTO item_locations (item_name, location_id, quantity, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (transfer.item_name, transfer.to_location_id, transfer.quantity,
+                 datetime.now().isoformat(), datetime.now().isoformat())
+            )
+
+        # Log the transfer in stock adjustments
+        cursor.execute(
+            """INSERT INTO stock_adjustments
+               (item_name, adjustment_type, quantity, reason, location_id, reference_number, notes, adjusted_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (transfer.item_name, 'subtraction', transfer.quantity, 'transfer',
+             transfer.from_location_id, f"Transfer to Location {transfer.to_location_id}",
+             transfer.notes, current_user.username, datetime.now().isoformat())
+        )
+
+        cursor.execute(
+            """INSERT INTO stock_adjustments
+               (item_name, adjustment_type, quantity, reason, location_id, reference_number, notes, adjusted_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (transfer.item_name, 'addition', transfer.quantity, 'transfer',
+             transfer.to_location_id, f"Transfer from Location {transfer.from_location_id}",
+             transfer.notes, current_user.username, datetime.now().isoformat())
+        )
+
+        # Log to history
+        cursor.execute(
+            """INSERT INTO history (action, item_name, quantity, user, timestamp, notes)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ('transfer', transfer.item_name, transfer.quantity, current_user.username,
+             datetime.now().isoformat(),
+             f"From Location {transfer.from_location_id} to {transfer.to_location_id}")
+        )
+
+        conn.commit()
+        conn.close()
+
+        logging.info(f"Stock transfer completed: {transfer.item_name}, {transfer.quantity} units from {transfer.from_location_id} to {transfer.to_location_id}")
+
+        return {
+            "status": "success",
+            "message": "Stock transferred successfully",
+            "transfer": transfer.dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error transferring stock: {e}")
+        raise HTTPException(status_code=500, detail=f"Error transferring stock: {str(e)}")
+
+@app.get("/stock-transfers")
+async def get_stock_transfers(
+    item_name: Optional[str] = None,
+    location_id: Optional[int] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get stock transfer history"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT sa.*, l.name as location_name
+            FROM stock_adjustments sa
+            LEFT JOIN locations l ON sa.location_id = l.id
+            WHERE sa.reason = 'transfer'
+        """
+        params = []
+
+        if item_name:
+            query += " AND sa.item_name = ?"
+            params.append(item_name)
+
+        if location_id:
+            query += " AND sa.location_id = ?"
+            params.append(location_id)
+
+        query += " ORDER BY sa.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        transfers = cursor.fetchall()
+        conn.close()
+
+        return {
+            "transfers": [
+                {
+                    "id": t[0],
+                    "item_name": t[1],
+                    "adjustment_type": t[2],
+                    "quantity": t[3],
+                    "location_id": t[5],
+                    "location_name": t[-1],
+                    "reference_number": t[7],
+                    "notes": t[8],
+                    "adjusted_by": t[9],
+                    "created_at": t[11]
+                }
+                for t in transfers
+            ]
+        }
+
+    except Exception as e:
+        logging.error(f"Error fetching stock transfers: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching stock transfers: {str(e)}")
 
 # ============================================================================
 # NOTES/COMMENTS ENDPOINTS
@@ -2568,6 +3484,1301 @@ async def delete_note(note_id: int, current_user: User = Depends(get_current_use
     except Exception as e:
         logging.error(f"Error deleting note: {e}")
         raise HTTPException(status_code=500, detail="Error deleting note")
+
+# ============================================================================
+# FINANCIAL REPORTING AND ANALYTICS
+# ============================================================================
+
+@app.get("/analytics/financial-summary")
+async def get_financial_summary(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get financial summary with revenue, costs, and profit"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build date filter
+        date_filter = ""
+        params = []
+        if start_date:
+            date_filter += " AND po.order_date >= ?"
+            params.append(start_date)
+        if end_date:
+            date_filter += " AND po.order_date <= ?"
+            params.append(end_date)
+
+        # Get total purchase costs from purchase orders
+        cursor.execute(
+            f"""SELECT
+                   COALESCE(SUM(total_amount), 0) as total_purchase_cost,
+                   COUNT(DISTINCT id) as total_orders
+               FROM purchase_orders po
+               WHERE status = 'received'{date_filter}""",
+            params
+        )
+        purchase_data = cursor.fetchone()
+        total_purchase_cost = purchase_data['total_purchase_cost'] if purchase_data else 0
+        total_orders = purchase_data['total_orders'] if purchase_data else 0
+
+        # Calculate current inventory value based on latest prices
+        cursor.execute("""
+            SELECT
+                COALESCE(SUM(i.quantity * COALESCE(p.price, 0)), 0) as inventory_value,
+                COUNT(DISTINCT i.item_name) as total_items
+            FROM items i
+            LEFT JOIN (
+                SELECT item_name, AVG(price) as price
+                FROM prices
+                GROUP BY item_name
+            ) p ON i.item_name = p.item_name
+        """)
+        inventory_data = cursor.fetchone()
+        inventory_value = inventory_data['inventory_value'] if inventory_data else 0
+        total_items = inventory_data['total_items'] if inventory_data else 0
+
+        # Get stock adjustments for revenue estimation (returned items)
+        cursor.execute(
+            f"""SELECT
+                   COUNT(*) as total_adjustments,
+                   COALESCE(SUM(CASE WHEN adjustment_type = 'increase' THEN quantity ELSE 0 END), 0) as items_added,
+                   COALESCE(SUM(CASE WHEN adjustment_type = 'decrease' THEN quantity ELSE 0 END), 0) as items_removed
+               FROM stock_adjustments
+               WHERE 1=1{date_filter.replace('po.', '')}""",
+            params
+        )
+        adjustments = cursor.fetchone()
+
+        # Calculate estimated revenue (items sold * average price)
+        # Assuming items_removed represents sales/usage
+        items_sold = adjustments['items_removed'] if adjustments else 0
+        cursor.execute("""
+            SELECT AVG(price) as avg_price
+            FROM prices
+        """)
+        avg_price_data = cursor.fetchone()
+        avg_price = avg_price_data['avg_price'] if avg_price_data and avg_price_data['avg_price'] else 0
+        estimated_revenue = items_sold * avg_price
+
+        # Calculate profit margin
+        gross_profit = estimated_revenue - total_purchase_cost
+        profit_margin = (gross_profit / estimated_revenue * 100) if estimated_revenue > 0 else 0
+
+        conn.close()
+
+        return {
+            "total_purchase_cost": round(total_purchase_cost, 2),
+            "estimated_revenue": round(estimated_revenue, 2),
+            "gross_profit": round(gross_profit, 2),
+            "profit_margin_percent": round(profit_margin, 2),
+            "current_inventory_value": round(inventory_value, 2),
+            "total_items": total_items,
+            "total_purchase_orders": total_orders,
+            "items_sold": items_sold,
+            "items_added": adjustments['items_added'] if adjustments else 0,
+            "total_adjustments": adjustments['total_adjustments'] if adjustments else 0
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting financial summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting financial summary: {str(e)}")
+
+
+@app.get("/analytics/inventory-value")
+async def get_inventory_value_breakdown(
+    current_user: User = Depends(get_current_user)
+):
+    """Get inventory value broken down by group/category"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                COALESCE(i.group_name, 'Uncategorized') as category,
+                COUNT(i.item_name) as item_count,
+                SUM(i.quantity) as total_quantity,
+                COALESCE(SUM(i.quantity * p.avg_price), 0) as total_value,
+                COALESCE(AVG(p.avg_price), 0) as avg_unit_price
+            FROM items i
+            LEFT JOIN (
+                SELECT item_name, AVG(price) as avg_price
+                FROM prices
+                GROUP BY item_name
+            ) p ON i.item_name = p.item_name
+            GROUP BY i.group_name
+            ORDER BY total_value DESC
+        """)
+
+        breakdown = []
+        for row in cursor.fetchall():
+            breakdown.append({
+                "category": row['category'],
+                "item_count": row['item_count'],
+                "total_quantity": row['total_quantity'],
+                "total_value": round(row['total_value'], 2),
+                "avg_unit_price": round(row['avg_unit_price'], 2)
+            })
+
+        conn.close()
+        return breakdown
+
+    except Exception as e:
+        logging.error(f"Error getting inventory value breakdown: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting inventory value breakdown: {str(e)}")
+
+
+@app.get("/analytics/top-items")
+async def get_top_items(
+    metric: str = 'value',  # 'value', 'quantity', 'movement'
+    limit: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """Get top items by various metrics"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        if metric == 'value':
+            # Top items by total value
+            cursor.execute("""
+                SELECT
+                    i.item_name,
+                    i.quantity,
+                    i.group_name,
+                    COALESCE(p.avg_price, 0) as unit_price,
+                    i.quantity * COALESCE(p.avg_price, 0) as total_value
+                FROM items i
+                LEFT JOIN (
+                    SELECT item_name, AVG(price) as avg_price
+                    FROM prices
+                    GROUP BY item_name
+                ) p ON i.item_name = p.item_name
+                ORDER BY total_value DESC
+                LIMIT ?
+            """, (limit,))
+        elif metric == 'quantity':
+            # Top items by quantity in stock
+            cursor.execute("""
+                SELECT
+                    i.item_name,
+                    i.quantity,
+                    i.group_name,
+                    COALESCE(p.avg_price, 0) as unit_price,
+                    i.quantity * COALESCE(p.avg_price, 0) as total_value
+                FROM items i
+                LEFT JOIN (
+                    SELECT item_name, AVG(price) as avg_price
+                    FROM prices
+                    GROUP BY item_name
+                ) p ON i.item_name = p.item_name
+                ORDER BY i.quantity DESC
+                LIMIT ?
+            """, (limit,))
+        else:  # movement
+            # Top items by stock movement (adjustments)
+            cursor.execute("""
+                SELECT
+                    sa.item_name,
+                    i.quantity as current_quantity,
+                    i.group_name,
+                    COUNT(*) as movement_count,
+                    SUM(sa.quantity) as total_moved,
+                    COALESCE(p.avg_price, 0) as unit_price
+                FROM stock_adjustments sa
+                JOIN items i ON sa.item_name = i.item_name
+                LEFT JOIN (
+                    SELECT item_name, AVG(price) as avg_price
+                    FROM prices
+                    GROUP BY item_name
+                ) p ON i.item_name = p.item_name
+                WHERE sa.adjustment_date >= datetime('now', '-30 days')
+                GROUP BY sa.item_name, i.quantity, i.group_name
+                ORDER BY total_moved DESC
+                LIMIT ?
+            """, (limit,))
+
+        items = []
+        for row in cursor.fetchall():
+            item_data = {
+                "item_name": row['item_name'],
+                "group_name": row['group_name'] or 'Uncategorized'
+            }
+
+            if metric == 'movement':
+                item_data.update({
+                    "current_quantity": row['current_quantity'],
+                    "movement_count": row['movement_count'],
+                    "total_moved": row['total_moved'],
+                    "unit_price": round(row['unit_price'], 2)
+                })
+            else:
+                item_data.update({
+                    "quantity": row['quantity'],
+                    "unit_price": round(row['unit_price'], 2),
+                    "total_value": round(row['total_value'], 2)
+                })
+
+            items.append(item_data)
+
+        conn.close()
+        return items
+
+    except Exception as e:
+        logging.error(f"Error getting top items: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting top items: {str(e)}")
+
+
+@app.get("/analytics/revenue-by-period")
+async def get_revenue_by_period(
+    period: str = 'daily',  # 'daily', 'weekly', 'monthly'
+    limit: int = 30,
+    current_user: User = Depends(get_current_user)
+):
+    """Get revenue/cost trends over time"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Determine date grouping
+        if period == 'daily':
+            date_format = '%Y-%m-%d'
+            date_trunc = "date(order_date)"
+        elif period == 'weekly':
+            date_format = '%Y-W%W'
+            date_trunc = "strftime('%Y-W%W', order_date)"
+        else:  # monthly
+            date_format = '%Y-%m'
+            date_trunc = "strftime('%Y-%m', order_date)"
+
+        # Get purchase costs by period
+        cursor.execute(f"""
+            SELECT
+                {date_trunc} as period,
+                SUM(total_amount) as total_cost,
+                COUNT(*) as order_count
+            FROM purchase_orders
+            WHERE status = 'received'
+                AND order_date >= datetime('now', '-{limit} days')
+            GROUP BY period
+            ORDER BY period DESC
+            LIMIT ?
+        """, (limit,))
+
+        periods = []
+        for row in cursor.fetchall():
+            periods.append({
+                "period": row['period'],
+                "total_cost": round(row['total_cost'], 2) if row['total_cost'] else 0,
+                "order_count": row['order_count']
+            })
+
+        conn.close()
+        return periods
+
+    except Exception as e:
+        logging.error(f"Error getting revenue by period: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting revenue by period: {str(e)}")
+
+
+@app.get("/analytics/cost-analysis")
+async def get_cost_analysis(
+    current_user: User = Depends(get_current_user)
+):
+    """Get cost analysis by supplier and item"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Cost by supplier
+        cursor.execute("""
+            SELECT
+                s.name as supplier_name,
+                s.id as supplier_id,
+                COUNT(DISTINCT po.id) as total_orders,
+                COALESCE(SUM(po.total_amount), 0) as total_spent,
+                COALESCE(AVG(po.total_amount), 0) as avg_order_value
+            FROM suppliers s
+            LEFT JOIN purchase_orders po ON s.id = po.supplier_id AND po.status = 'received'
+            GROUP BY s.id, s.name
+            HAVING total_orders > 0
+            ORDER BY total_spent DESC
+        """)
+
+        suppliers = []
+        for row in cursor.fetchall():
+            suppliers.append({
+                "supplier_name": row['supplier_name'],
+                "supplier_id": row['supplier_id'],
+                "total_orders": row['total_orders'],
+                "total_spent": round(row['total_spent'], 2),
+                "avg_order_value": round(row['avg_order_value'], 2)
+            })
+
+        # Cost by item (from PO items)
+        cursor.execute("""
+            SELECT
+                poi.item_name,
+                COUNT(DISTINCT poi.po_id) as order_count,
+                SUM(poi.quantity) as total_quantity_ordered,
+                COALESCE(AVG(poi.unit_price), 0) as avg_unit_cost,
+                COALESCE(SUM(poi.total_price), 0) as total_cost
+            FROM purchase_order_items poi
+            JOIN purchase_orders po ON poi.po_id = po.id
+            WHERE po.status = 'received'
+            GROUP BY poi.item_name
+            ORDER BY total_cost DESC
+            LIMIT 20
+        """)
+
+        items = []
+        for row in cursor.fetchall():
+            items.append({
+                "item_name": row['item_name'],
+                "order_count": row['order_count'],
+                "total_quantity_ordered": row['total_quantity_ordered'],
+                "avg_unit_cost": round(row['avg_unit_cost'], 2),
+                "total_cost": round(row['total_cost'], 2)
+            })
+
+        conn.close()
+        return {
+            "by_supplier": suppliers,
+            "by_item": items
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting cost analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting cost analysis: {str(e)}")
+
+
+@app.get("/analytics/profit-margins")
+async def get_profit_margins(
+    current_user: User = Depends(get_current_user)
+):
+    """Calculate profit margins by item and category"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Profit margins by item (comparing purchase cost vs selling price)
+        cursor.execute("""
+            SELECT
+                i.item_name,
+                i.group_name,
+                COALESCE(AVG(poi.unit_price), 0) as avg_cost,
+                COALESCE(AVG(p.price), 0) as avg_selling_price,
+                (COALESCE(AVG(p.price), 0) - COALESCE(AVG(poi.unit_price), 0)) as profit_per_unit,
+                CASE
+                    WHEN COALESCE(AVG(p.price), 0) > 0 THEN
+                        ((COALESCE(AVG(p.price), 0) - COALESCE(AVG(poi.unit_price), 0)) / COALESCE(AVG(p.price), 0) * 100)
+                    ELSE 0
+                END as profit_margin_percent
+            FROM items i
+            LEFT JOIN purchase_order_items poi ON i.item_name = poi.item_name
+            LEFT JOIN prices p ON i.item_name = p.item_name
+            GROUP BY i.item_name, i.group_name
+            HAVING avg_selling_price > 0 OR avg_cost > 0
+            ORDER BY profit_margin_percent DESC
+            LIMIT 20
+        """)
+
+        items = []
+        for row in cursor.fetchall():
+            items.append({
+                "item_name": row['item_name'],
+                "group_name": row['group_name'] or 'Uncategorized',
+                "avg_cost": round(row['avg_cost'], 2),
+                "avg_selling_price": round(row['avg_selling_price'], 2),
+                "profit_per_unit": round(row['profit_per_unit'], 2),
+                "profit_margin_percent": round(row['profit_margin_percent'], 2)
+            })
+
+        # Profit margins by category
+        cursor.execute("""
+            SELECT
+                COALESCE(i.group_name, 'Uncategorized') as category,
+                COUNT(DISTINCT i.item_name) as item_count,
+                COALESCE(AVG(poi.unit_price), 0) as avg_cost,
+                COALESCE(AVG(p.price), 0) as avg_selling_price,
+                CASE
+                    WHEN COALESCE(AVG(p.price), 0) > 0 THEN
+                        ((COALESCE(AVG(p.price), 0) - COALESCE(AVG(poi.unit_price), 0)) / COALESCE(AVG(p.price), 0) * 100)
+                    ELSE 0
+                END as profit_margin_percent
+            FROM items i
+            LEFT JOIN purchase_order_items poi ON i.item_name = poi.item_name
+            LEFT JOIN prices p ON i.item_name = p.item_name
+            GROUP BY i.group_name
+            ORDER BY profit_margin_percent DESC
+        """)
+
+        categories = []
+        for row in cursor.fetchall():
+            categories.append({
+                "category": row['category'],
+                "item_count": row['item_count'],
+                "avg_cost": round(row['avg_cost'], 2),
+                "avg_selling_price": round(row['avg_selling_price'], 2),
+                "profit_margin_percent": round(row['profit_margin_percent'], 2)
+            })
+
+        conn.close()
+        return {
+            "by_item": items,
+            "by_category": categories
+        }
+
+    except Exception as e:
+        logging.error(f"Error calculating profit margins: {e}")
+        raise HTTPException(status_code=500, detail=f"Error calculating profit margins: {str(e)}")
+
+# ============================================================================
+# INVENTORY FORECASTING
+# ============================================================================
+
+@app.get("/forecasting/demand-prediction")
+async def predict_demand(
+    item_name: Optional[str] = None,
+    days_ahead: int = 30,
+    current_user: User = Depends(get_current_user)
+):
+    """Predict future demand based on historical stock movements"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build item filter
+        item_filter = ""
+        params = []
+        if item_name:
+            item_filter = "WHERE sa.item_name = ?"
+            params.append(item_name)
+
+        # Get historical stock movements (last 90 days)
+        cursor.execute(
+            f"""SELECT
+                   sa.item_name,
+                   i.group_name,
+                   DATE(sa.adjustment_date) as date,
+                   SUM(CASE WHEN sa.adjustment_type = 'decrease' THEN sa.quantity ELSE 0 END) as quantity_out,
+                   SUM(CASE WHEN sa.adjustment_type = 'increase' THEN sa.quantity ELSE 0 END) as quantity_in
+               FROM stock_adjustments sa
+               JOIN items i ON sa.item_name = i.item_name
+               {item_filter}
+               {'AND' if item_filter else 'WHERE'} sa.adjustment_date >= datetime('now', '-90 days')
+               GROUP BY sa.item_name, i.group_name, DATE(sa.adjustment_date)
+               ORDER BY sa.item_name, date""",
+            params
+        )
+
+        movements = cursor.fetchall()
+
+        # Calculate average daily consumption per item
+        item_stats = {}
+        for row in movements:
+            item = row['item_name']
+            if item not in item_stats:
+                item_stats[item] = {
+                    'item_name': item,
+                    'group_name': row['group_name'],
+                    'total_out': 0,
+                    'total_in': 0,
+                    'days_tracked': 0
+                }
+            item_stats[item]['total_out'] += row['quantity_out']
+            item_stats[item]['total_in'] += row['quantity_in']
+            item_stats[item]['days_tracked'] += 1
+
+        # Calculate predictions
+        predictions = []
+        for item, stats in item_stats.items():
+            avg_daily_consumption = stats['total_out'] / max(stats['days_tracked'], 1)
+            predicted_demand = avg_daily_consumption * days_ahead
+
+            # Get current stock
+            cursor.execute("SELECT quantity, reorder_level FROM items WHERE item_name = ?", (item,))
+            current = cursor.fetchone()
+            current_stock = current['quantity'] if current else 0
+            reorder_level = current['reorder_level'] if current and current['reorder_level'] else 0
+
+            # Calculate stock depletion date
+            days_until_depletion = (current_stock / avg_daily_consumption) if avg_daily_consumption > 0 else 999
+
+            # Determine urgency
+            if days_until_depletion < 7:
+                urgency = 'critical'
+            elif days_until_depletion < 14:
+                urgency = 'high'
+            elif days_until_depletion < 30:
+                urgency = 'medium'
+            else:
+                urgency = 'low'
+
+            predictions.append({
+                'item_name': item,
+                'group_name': stats['group_name'],
+                'current_stock': current_stock,
+                'avg_daily_consumption': round(avg_daily_consumption, 2),
+                'predicted_demand_next_30_days': round(predicted_demand, 2),
+                'days_until_depletion': round(days_until_depletion, 1) if days_until_depletion < 999 else None,
+                'reorder_level': reorder_level,
+                'should_reorder': current_stock <= reorder_level or days_until_depletion < 14,
+                'urgency': urgency,
+                'tracking_period_days': stats['days_tracked']
+            })
+
+        # Sort by urgency
+        urgency_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        predictions.sort(key=lambda x: urgency_order[x['urgency']])
+
+        conn.close()
+        return predictions
+
+    except Exception as e:
+        logging.error(f"Error predicting demand: {e}")
+        raise HTTPException(status_code=500, detail=f"Error predicting demand: {str(e)}")
+
+
+@app.get("/forecasting/reorder-recommendations")
+async def get_reorder_recommendations(
+    current_user: User = Depends(get_current_user)
+):
+    """Get items that should be reordered based on forecasting"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get all items with their current stock and reorder levels
+        cursor.execute("""
+            SELECT
+                i.item_name,
+                i.quantity as current_stock,
+                i.reorder_level,
+                i.group_name,
+                COALESCE(AVG(sp.unit_price), 0) as avg_unit_price,
+                COALESCE(AVG(sp.lead_time_days), 7) as avg_lead_time
+            FROM items i
+            LEFT JOIN supplier_products sp ON i.item_name = sp.item_name AND sp.is_available = 1
+            GROUP BY i.item_name, i.quantity, i.reorder_level, i.group_name
+        """)
+
+        items = cursor.fetchall()
+
+        recommendations = []
+        for item in items:
+            # Calculate historical consumption
+            cursor.execute("""
+                SELECT
+                    COALESCE(AVG(CASE WHEN adjustment_type = 'decrease' THEN quantity ELSE 0 END), 0) as avg_consumption
+                FROM stock_adjustments
+                WHERE item_name = ?
+                    AND adjustment_date >= datetime('now', '-30 days')
+            """, (item['item_name'],))
+
+            consumption_data = cursor.fetchone()
+            avg_daily_consumption = consumption_data['avg_consumption'] if consumption_data else 0
+
+            # Calculate recommended order quantity
+            # Safety stock = avg daily consumption * lead time * 1.5 (safety factor)
+            lead_time = item['avg_lead_time']
+            safety_stock = avg_daily_consumption * lead_time * 1.5
+
+            # Reorder quantity = (avg daily consumption * lead time) + safety stock - current stock
+            reorder_quantity = max(0, (avg_daily_consumption * lead_time) + safety_stock - item['current_stock'])
+
+            # Only recommend if below reorder level or will run out soon
+            days_until_stockout = (item['current_stock'] / avg_daily_consumption) if avg_daily_consumption > 0 else 999
+
+            if item['current_stock'] <= item['reorder_level'] or days_until_stockout < lead_time:
+                recommendations.append({
+                    'item_name': item['item_name'],
+                    'group_name': item['group_name'],
+                    'current_stock': item['current_stock'],
+                    'reorder_level': item['reorder_level'],
+                    'recommended_order_qty': round(reorder_quantity),
+                    'avg_daily_consumption': round(avg_daily_consumption, 2),
+                    'avg_lead_time_days': round(lead_time),
+                    'days_until_stockout': round(days_until_stockout, 1) if days_until_stockout < 999 else None,
+                    'estimated_cost': round(reorder_quantity * item['avg_unit_price'], 2),
+                    'priority': 'critical' if days_until_stockout < 7 else 'high' if days_until_stockout < 14 else 'medium'
+                })
+
+        # Sort by priority
+        priority_order = {'critical': 0, 'high': 1, 'medium': 2}
+        recommendations.sort(key=lambda x: priority_order[x['priority']])
+
+        conn.close()
+        return recommendations
+
+    except Exception as e:
+        logging.error(f"Error getting reorder recommendations: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting reorder recommendations: {str(e)}")
+
+
+@app.get("/forecasting/stock-trends")
+async def get_stock_trends(
+    item_name: Optional[str] = None,
+    days: int = 30,
+    current_user: User = Depends(get_current_user)
+):
+    """Get stock level trends over time"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build item filter
+        item_filter = ""
+        params = [days]
+        if item_name:
+            item_filter = "AND h.item_name = ?"
+            params.append(item_name)
+
+        # Get historical stock levels from history
+        cursor.execute(
+            f"""SELECT
+                   h.item_name,
+                   DATE(h.timestamp) as date,
+                   h.quantity,
+                   h.action
+               FROM history h
+               WHERE h.timestamp >= datetime('now', '-? days')
+               {item_filter}
+               ORDER BY h.item_name, h.timestamp""",
+            params
+        )
+
+        history = cursor.fetchall()
+
+        # Group by item and date
+        trends = {}
+        for row in history:
+            item = row['item_name']
+            date = row['date']
+
+            if item not in trends:
+                trends[item] = {}
+
+            if date not in trends[item]:
+                trends[item][date] = {
+                    'date': date,
+                    'quantity': row['quantity'],
+                    'actions': []
+                }
+
+            trends[item][date]['actions'].append(row['action'])
+
+        # Format response
+        result = []
+        for item, dates in trends.items():
+            result.append({
+                'item_name': item,
+                'trend_data': list(dates.values())
+            })
+
+        conn.close()
+        return result
+
+    except Exception as e:
+        logging.error(f"Error getting stock trends: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting stock trends: {str(e)}")
+
+
+@app.get("/forecasting/seasonal-analysis")
+async def get_seasonal_analysis(
+    current_user: User = Depends(get_current_user)
+):
+    """Analyze seasonal patterns in inventory movement"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get movements by month for the past year
+        cursor.execute("""
+            SELECT
+                sa.item_name,
+                strftime('%m', sa.adjustment_date) as month,
+                strftime('%Y', sa.adjustment_date) as year,
+                SUM(CASE WHEN sa.adjustment_type = 'decrease' THEN sa.quantity ELSE 0 END) as total_out,
+                COUNT(*) as movement_count
+            FROM stock_adjustments sa
+            WHERE sa.adjustment_date >= datetime('now', '-365 days')
+            GROUP BY sa.item_name, month, year
+            ORDER BY sa.item_name, year, month
+        """)
+
+        movements = cursor.fetchall()
+
+        # Analyze patterns
+        item_patterns = {}
+        for row in movements:
+            item = row['item_name']
+            month = int(row['month'])
+
+            if item not in item_patterns:
+                item_patterns[item] = {
+                    'item_name': item,
+                    'monthly_data': {},
+                    'peak_month': None,
+                    'low_month': None,
+                    'avg_monthly_movement': 0
+                }
+
+            if month not in item_patterns[item]['monthly_data']:
+                item_patterns[item]['monthly_data'][month] = {
+                    'month': month,
+                    'total_movement': 0,
+                    'count': 0
+                }
+
+            item_patterns[item]['monthly_data'][month]['total_movement'] += row['total_out']
+            item_patterns[item]['monthly_data'][month]['count'] += 1
+
+        # Calculate peaks and averages
+        result = []
+        month_names = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+        for item, data in item_patterns.items():
+            if data['monthly_data']:
+                monthly_totals = {m: d['total_movement'] for m, d in data['monthly_data'].items()}
+                peak_month = max(monthly_totals, key=monthly_totals.get)
+                low_month = min(monthly_totals, key=monthly_totals.get)
+                avg_movement = sum(monthly_totals.values()) / len(monthly_totals)
+
+                # Calculate seasonality index (peak / average)
+                seasonality_index = (monthly_totals[peak_month] / avg_movement) if avg_movement > 0 else 1
+
+                result.append({
+                    'item_name': item,
+                    'peak_month': month_names[peak_month],
+                    'peak_month_movement': monthly_totals[peak_month],
+                    'low_month': month_names[low_month],
+                    'low_month_movement': monthly_totals[low_month],
+                    'avg_monthly_movement': round(avg_movement, 2),
+                    'seasonality_index': round(seasonality_index, 2),
+                    'is_seasonal': seasonality_index > 1.5,
+                    'monthly_breakdown': [
+                        {
+                            'month': month_names[m],
+                            'movement': d['total_movement']
+                        }
+                        for m, d in sorted(data['monthly_data'].items())
+                    ]
+                })
+
+        # Sort by seasonality index
+        result.sort(key=lambda x: x['seasonality_index'], reverse=True)
+
+        conn.close()
+        return result
+
+    except Exception as e:
+        logging.error(f"Error analyzing seasonal patterns: {e}")
+        raise HTTPException(status_code=500, detail=f"Error analyzing seasonal patterns: {str(e)}")
+
+# ============================================================================
+# SUPPLIER PERFORMANCE METRICS
+# ============================================================================
+
+@app.get("/suppliers/{supplier_id}/performance")
+async def get_supplier_performance(
+    supplier_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Get comprehensive performance metrics for a supplier"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Verify supplier exists
+        cursor.execute("SELECT name FROM suppliers WHERE id = ?", (supplier_id,))
+        supplier = cursor.fetchone()
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+
+        # Get all purchase orders from this supplier
+        cursor.execute("""
+            SELECT
+                id,
+                order_date,
+                expected_delivery_date,
+                actual_delivery_date,
+                status,
+                total_amount
+            FROM purchase_orders
+            WHERE supplier_id = ?
+        """, (supplier_id,))
+
+        orders = cursor.fetchall()
+
+        # Calculate on-time delivery rate
+        total_completed = 0
+        on_time_deliveries = 0
+        total_late_days = 0
+
+        for order in orders:
+            if order['status'] == 'received' and order['expected_delivery_date'] and order['actual_delivery_date']:
+                total_completed += 1
+                expected = datetime.fromisoformat(order['expected_delivery_date'])
+                actual = datetime.fromisoformat(order['actual_delivery_date'])
+                diff = (actual - expected).days
+
+                if diff <= 0:
+                    on_time_deliveries += 1
+                else:
+                    total_late_days += diff
+
+        on_time_rate = (on_time_deliveries / total_completed * 100) if total_completed > 0 else 0
+        avg_delay_days = (total_late_days / (total_completed - on_time_deliveries)) if (total_completed - on_time_deliveries) > 0 else 0
+
+        # Calculate price competitiveness
+        cursor.execute("""
+            SELECT
+                sp.item_name,
+                sp.unit_price as supplier_price,
+                (SELECT AVG(unit_price) FROM supplier_products WHERE item_name = sp.item_name AND is_available = 1) as market_avg
+            FROM supplier_products sp
+            WHERE sp.supplier_id = ? AND sp.is_available = 1
+        """, (supplier_id,))
+
+        price_data = cursor.fetchall()
+        competitive_count = 0
+        total_items = len(price_data)
+
+        for item in price_data:
+            if item['market_avg'] and item['supplier_price'] <= item['market_avg']:
+                competitive_count += 1
+
+        price_competitiveness = (competitive_count / total_items * 100) if total_items > 0 else 0
+
+        # Calculate order fulfillment statistics
+        total_orders = len(orders)
+        pending_orders = sum(1 for o in orders if o['status'] == 'pending')
+        confirmed_orders = sum(1 for o in orders if o['status'] == 'confirmed')
+        shipped_orders = sum(1 for o in orders if o['status'] == 'shipped')
+        received_orders = sum(1 for o in orders if o['status'] == 'received')
+        cancelled_orders = sum(1 for o in orders if o['status'] == 'cancelled')
+
+        fulfillment_rate = (received_orders / (total_orders - cancelled_orders) * 100) if (total_orders - cancelled_orders) > 0 else 0
+        cancellation_rate = (cancelled_orders / total_orders * 100) if total_orders > 0 else 0
+
+        # Calculate total spending and average order value
+        total_spent = sum(o['total_amount'] for o in orders if o['status'] == 'received')
+        avg_order_value = (total_spent / received_orders) if received_orders > 0 else 0
+
+        # Get lead time statistics
+        cursor.execute("""
+            SELECT AVG(lead_time_days) as avg_lead_time
+            FROM supplier_products
+            WHERE supplier_id = ? AND is_available = 1
+        """, (supplier_id,))
+
+        lead_time_data = cursor.fetchone()
+        avg_lead_time = lead_time_data['avg_lead_time'] if lead_time_data and lead_time_data['avg_lead_time'] else 0
+
+        # Get supplier rating
+        cursor.execute("SELECT rating FROM suppliers WHERE id = ?", (supplier_id,))
+        rating_data = cursor.fetchone()
+        supplier_rating = rating_data['rating'] if rating_data and rating_data['rating'] else 0
+
+        # Calculate overall performance score (0-100)
+        # Weighted: On-time 30%, Price 25%, Fulfillment 25%, Rating 20%
+        performance_score = (
+            (on_time_rate * 0.30) +
+            (price_competitiveness * 0.25) +
+            (fulfillment_rate * 0.25) +
+            (supplier_rating * 20 * 0.20)  # Convert rating from 1-5 to percentage
+        )
+
+        conn.close()
+
+        return {
+            'supplier_id': supplier_id,
+            'supplier_name': supplier['name'],
+            'overall_performance_score': round(performance_score, 2),
+            'delivery_performance': {
+                'on_time_delivery_rate': round(on_time_rate, 2),
+                'total_completed_orders': total_completed,
+                'on_time_deliveries': on_time_deliveries,
+                'late_deliveries': total_completed - on_time_deliveries,
+                'avg_delay_days': round(avg_delay_days, 2)
+            },
+            'price_performance': {
+                'price_competitiveness_score': round(price_competitiveness, 2),
+                'competitive_items': competitive_count,
+                'total_items_supplied': total_items
+            },
+            'order_statistics': {
+                'total_orders': total_orders,
+                'pending_orders': pending_orders,
+                'confirmed_orders': confirmed_orders,
+                'shipped_orders': shipped_orders,
+                'received_orders': received_orders,
+                'cancelled_orders': cancelled_orders,
+                'fulfillment_rate': round(fulfillment_rate, 2),
+                'cancellation_rate': round(cancellation_rate, 2)
+            },
+            'financial_metrics': {
+                'total_spent': round(total_spent, 2),
+                'avg_order_value': round(avg_order_value, 2),
+                'avg_lead_time_days': round(avg_lead_time, 2)
+            },
+            'quality_rating': supplier_rating
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting supplier performance: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting supplier performance: {str(e)}")
+
+
+@app.get("/suppliers/performance/comparison")
+async def compare_supplier_performance(
+    current_user: User = Depends(get_current_user)
+):
+    """Compare performance across all active suppliers"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Get all active suppliers
+        cursor.execute("SELECT id, name FROM suppliers WHERE is_active = 1")
+        suppliers = cursor.fetchall()
+
+        comparisons = []
+
+        for supplier in suppliers:
+            # Get basic performance metrics
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_orders,
+                    SUM(CASE WHEN status = 'received' THEN 1 ELSE 0 END) as completed_orders,
+                    SUM(CASE WHEN status = 'received' THEN total_amount ELSE 0 END) as total_spent
+                FROM purchase_orders
+                WHERE supplier_id = ?
+            """, (supplier['id'],))
+
+            stats = cursor.fetchone()
+
+            # Calculate on-time rate
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_on_time
+                FROM purchase_orders
+                WHERE supplier_id = ?
+                    AND status = 'received'
+                    AND actual_delivery_date IS NOT NULL
+                    AND expected_delivery_date IS NOT NULL
+                    AND actual_delivery_date <= expected_delivery_date
+            """, (supplier['id'],))
+
+            on_time_data = cursor.fetchone()
+            on_time_rate = (on_time_data['total_on_time'] / stats['completed_orders'] * 100) if stats['completed_orders'] > 0 else 0
+
+            # Get average price rank
+            cursor.execute("""
+                SELECT COUNT(*) as items_supplied
+                FROM supplier_products
+                WHERE supplier_id = ? AND is_available = 1
+            """, (supplier['id'],))
+
+            items_data = cursor.fetchone()
+
+            # Get supplier rating
+            cursor.execute("SELECT rating FROM suppliers WHERE id = ?", (supplier['id'],))
+            rating_data = cursor.fetchone()
+            rating = rating_data['rating'] if rating_data and rating_data['rating'] else 0
+
+            comparisons.append({
+                'supplier_id': supplier['id'],
+                'supplier_name': supplier['name'],
+                'total_orders': stats['total_orders'],
+                'completed_orders': stats['completed_orders'],
+                'total_spent': round(stats['total_spent'], 2) if stats['total_spent'] else 0,
+                'on_time_delivery_rate': round(on_time_rate, 2),
+                'items_supplied': items_data['items_supplied'],
+                'quality_rating': rating,
+                'avg_order_value': round(stats['total_spent'] / stats['completed_orders'], 2) if stats['completed_orders'] > 0 else 0
+            })
+
+        # Sort by total spent (highest first)
+        comparisons.sort(key=lambda x: x['total_spent'], reverse=True)
+
+        conn.close()
+        return comparisons
+
+    except Exception as e:
+        logging.error(f"Error comparing supplier performance: {e}")
+        raise HTTPException(status_code=500, detail=f"Error comparing supplier performance: {str(e)}")
+
+# ============================================================================
+# AUDIT LOG SYSTEM
+# ============================================================================
+
+def create_audit_log(
+    action_type: str,
+    entity_type: str,
+    user_name: str,
+    entity_id: str = None,
+    entity_name: str = None,
+    description: str = None,
+    old_values: str = None,
+    new_values: str = None,
+    user_role: str = None,
+    success: bool = True,
+    error_message: str = None
+):
+    """Helper function to create audit log entries"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO audit_log (
+                action_type, entity_type, entity_id, entity_name,
+                user_name, user_role, description, old_values, new_values,
+                success, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            action_type, entity_type, entity_id, entity_name,
+            user_name, user_role, description, old_values, new_values,
+            1 if success else 0, error_message
+        ))
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Error creating audit log: {e}")
+
+
+@app.get("/audit-log")
+async def get_audit_log(
+    action_type: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    user_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_admin_user)
+):
+    """Get audit log entries with filtering"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build query with filters
+        query = "SELECT * FROM audit_log WHERE 1=1"
+        params = []
+
+        if action_type:
+            query += " AND action_type = ?"
+            params.append(action_type)
+
+        if entity_type:
+            query += " AND entity_type = ?"
+            params.append(entity_type)
+
+        if user_name:
+            query += " AND user_name = ?"
+            params.append(user_name)
+
+        if start_date:
+            query += " AND timestamp >= ?"
+            params.append(start_date)
+
+        if end_date:
+            query += " AND timestamp <= ?"
+            params.append(end_date)
+
+        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor.execute(query, params)
+        logs = [dict(row) for row in cursor.fetchall()]
+
+        # Get total count
+        count_query = "SELECT COUNT(*) as total FROM audit_log WHERE 1=1"
+        count_params = []
+
+        if action_type:
+            count_query += " AND action_type = ?"
+            count_params.append(action_type)
+
+        if entity_type:
+            count_query += " AND entity_type = ?"
+            count_params.append(entity_type)
+
+        if user_name:
+            count_query += " AND user_name = ?"
+            count_params.append(user_name)
+
+        if start_date:
+            count_query += " AND timestamp >= ?"
+            count_params.append(start_date)
+
+        if end_date:
+            count_query += " AND timestamp <= ?"
+            count_params.append(end_date)
+
+        cursor.execute(count_query, count_params)
+        total = cursor.fetchone()['total']
+
+        conn.close()
+
+        return {
+            "logs": logs,
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+
+    except Exception as e:
+        logging.error(f"Error fetching audit log: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching audit log: {str(e)}")
+
+
+@app.get("/audit-log/statistics")
+async def get_audit_statistics(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Get audit log statistics"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Build date filter
+        date_filter = ""
+        params = []
+        if start_date:
+            date_filter += " AND timestamp >= ?"
+            params.append(start_date)
+        if end_date:
+            date_filter += " AND timestamp <= ?"
+            params.append(end_date)
+
+        # Get action type breakdown
+        cursor.execute(
+            f"""SELECT action_type, COUNT(*) as count
+               FROM audit_log
+               WHERE 1=1{date_filter}
+               GROUP BY action_type
+               ORDER BY count DESC""",
+            params
+        )
+        actions_breakdown = [dict(row) for row in cursor.fetchall()]
+
+        # Get entity type breakdown
+        cursor.execute(
+            f"""SELECT entity_type, COUNT(*) as count
+               FROM audit_log
+               WHERE 1=1{date_filter}
+               GROUP BY entity_type
+               ORDER BY count DESC""",
+            params
+        )
+        entities_breakdown = [dict(row) for row in cursor.fetchall()]
+
+        # Get user activity
+        cursor.execute(
+            f"""SELECT user_name, COUNT(*) as action_count
+               FROM audit_log
+               WHERE 1=1{date_filter}
+               GROUP BY user_name
+               ORDER BY action_count DESC
+               LIMIT 10""",
+            params
+        )
+        top_users = [dict(row) for row in cursor.fetchall()]
+
+        # Get total counts
+        cursor.execute(
+            f"""SELECT
+                   COUNT(*) as total_actions,
+                   SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_actions,
+                   SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed_actions
+               FROM audit_log
+               WHERE 1=1{date_filter}""",
+            params
+        )
+        totals = dict(cursor.fetchone())
+
+        # Get recent activity (last 24 hours by hour)
+        cursor.execute("""
+            SELECT
+                strftime('%H:00', timestamp) as hour,
+                COUNT(*) as count
+            FROM audit_log
+            WHERE timestamp >= datetime('now', '-24 hours')
+            GROUP BY hour
+            ORDER BY hour
+        """)
+        hourly_activity = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        return {
+            "totals": totals,
+            "actions_breakdown": actions_breakdown,
+            "entities_breakdown": entities_breakdown,
+            "top_users": top_users,
+            "hourly_activity": hourly_activity
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting audit statistics: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting audit statistics: {str(e)}")
+
+
+@app.get("/audit-log/user/{username}")
+async def get_user_audit_log(
+    username: str,
+    limit: int = 50,
+    current_user: User = Depends(get_admin_user)
+):
+    """Get audit log for a specific user"""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM audit_log
+            WHERE user_name = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (username, limit))
+
+        logs = [dict(row) for row in cursor.fetchall()]
+
+        # Get user statistics
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_actions,
+                COUNT(DISTINCT DATE(timestamp)) as active_days,
+                MIN(timestamp) as first_action,
+                MAX(timestamp) as last_action
+            FROM audit_log
+            WHERE user_name = ?
+        """, (username,))
+
+        stats = dict(cursor.fetchone())
+
+        conn.close()
+
+        return {
+            "username": username,
+            "logs": logs,
+            "statistics": stats
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting user audit log: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting user audit log: {str(e)}")
 
 # ============================================================================
 # Health Check

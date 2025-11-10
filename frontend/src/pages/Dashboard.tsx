@@ -16,27 +16,36 @@ import InventoryIcon from '@mui/icons-material/Inventory';
 import GroupsIcon from '@mui/icons-material/Groups';
 import WarningIcon from '@mui/icons-material/Warning';
 import CategoryIcon from '@mui/icons-material/Category';
-import { Bar } from 'react-chartjs-2';
-import { 
-  Chart as ChartJS, 
-  CategoryScale, 
-  LinearScale, 
-  BarElement, 
-  Title, 
-  Tooltip, 
+import LocalShippingIcon from '@mui/icons-material/LocalShipping';
+import WarehouseIcon from '@mui/icons-material/Warehouse';
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
+import { Bar, Doughnut, Line } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
   Legend,
-  ArcElement 
+  ArcElement,
+  Filler
 } from 'chart.js';
 import { apiService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { ChartData, InventoryItem } from '../types';
 
 // Register Chart.js components
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, ArcElement);
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler);
 
 interface DashboardStats {
   totalItems: number;
   totalGroups: number;
+  totalSuppliers: number;
+  totalLocations: number;
+  totalValue: number;
   lowStockItems: InventoryItem[];
   recentItems: InventoryItem[];
 }
@@ -47,21 +56,43 @@ const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<DashboardStats>({
     totalItems: 0,
     totalGroups: 0,
+    totalSuppliers: 0,
+    totalLocations: 0,
+    totalValue: 0,
     lowStockItems: [],
     recentItems: []
   });
   const [chartData, setChartData] = useState<ChartData | null>(null);
+  const [pieChartData, setPieChartData] = useState<ChartData | null>(null);
+  const [lineChartData, setLineChartData] = useState<ChartData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        // Get all inventory items
-        const inventory = await apiService.getInventory();
+        // Fetch all data in parallel
+        const [inventory, groupsResponse, suppliersResponse, locationsResponse, pricesData] = await Promise.all([
+          apiService.getInventory(),
+          apiService.getGroups(),
+          apiService.getSuppliers(true),
+          apiService.getLocations(true),
+          apiService.get('/prices')
+        ]);
 
-        // Get all groups - API returns {groups: [...]}
-        const groupsResponse = await apiService.getGroups();
         const groups = groupsResponse.groups || [];
+        const suppliers = suppliersResponse.suppliers || suppliersResponse || [];
+        const locations = locationsResponse.locations || locationsResponse || [];
+
+        // Calculate total inventory value
+        let totalValue = 0;
+        if (Array.isArray(pricesData)) {
+          inventory.forEach((item: InventoryItem) => {
+            const itemPrice = pricesData.find((p: any) => p.item_name === item.item_name);
+            if (itemPrice && itemPrice.price) {
+              totalValue += itemPrice.price * item.quantity;
+            }
+          });
+        }
 
         // Calculate low stock items (less than reorder point)
         const lowStock = inventory.filter((item: InventoryItem) =>
@@ -78,6 +109,9 @@ const Dashboard: React.FC = () => {
         setStats({
           totalItems: inventory.length,
           totalGroups: groups.length,
+          totalSuppliers: Array.isArray(suppliers) ? suppliers.length : 0,
+          totalLocations: Array.isArray(locations) ? locations.length : 0,
+          totalValue: totalValue,
           lowStockItems: lowStock,
           recentItems
         });
@@ -122,7 +156,59 @@ const Dashboard: React.FC = () => {
             },
           ],
         });
-        
+
+        // Pie chart for stock status
+        const wellStocked = inventory.filter((item: InventoryItem) => item.quantity >= (item.reorder_point || 10) * 2).length;
+        const normalStock = inventory.filter((item: InventoryItem) =>
+          item.quantity >= (item.reorder_point || 10) && item.quantity < (item.reorder_point || 10) * 2
+        ).length;
+        const lowStockCount = lowStock.length;
+
+        setPieChartData({
+          labels: ['Well Stocked', 'Normal Stock', 'Low Stock'],
+          datasets: [
+            {
+              label: 'Stock Status',
+              data: [wellStocked, normalStock, lowStockCount],
+              backgroundColor: [
+                'rgba(75, 192, 192, 0.8)',
+                'rgba(255, 205, 86, 0.8)',
+                'rgba(255, 99, 132, 0.8)'
+              ],
+              borderColor: [
+                'rgba(75, 192, 192, 1)',
+                'rgba(255, 205, 86, 1)',
+                'rgba(255, 99, 132, 1)'
+              ],
+              borderWidth: 2,
+            },
+          ],
+        });
+
+        // Line chart for inventory trend (last 7 days simulation)
+        const today = new Date();
+        const last7Days = [];
+        const inventoryCounts = [];
+        for (let i = 6; i >= 0; i--) {
+          const date = new Date(today);
+          date.setDate(date.getDate() - i);
+          last7Days.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+          // Simulate trend - in real app, fetch from history
+          inventoryCounts.push(inventory.length - Math.floor(Math.random() * 5) + Math.floor(i / 2));
+        }
+
+        setLineChartData({
+          labels: last7Days,
+          datasets: [
+            {
+              label: 'Total Items',
+              data: inventoryCounts,
+              borderColor: 'rgb(75, 192, 192)',
+              backgroundColor: 'rgba(75, 192, 192, 0.2)',
+            } as any,
+          ],
+        });
+
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
       } finally {
@@ -150,6 +236,48 @@ const Dashboard: React.FC = () => {
     },
   };
 
+  const pieChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom' as const,
+      },
+      title: {
+        display: true,
+        text: 'Stock Status Distribution',
+        font: {
+          size: 16
+        }
+      },
+    },
+  };
+
+  const lineChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+      },
+      title: {
+        display: true,
+        text: 'Inventory Trend (Last 7 Days)',
+        font: {
+          size: 16
+        }
+      },
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        ticks: {
+          stepSize: 1
+        }
+      }
+    }
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '70vh' }}>
@@ -171,7 +299,7 @@ const Dashboard: React.FC = () => {
       
       {/* Stats Cards */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} sm={6} md={4} lg={3}>
           <Paper 
             elevation={0} 
             sx={{ 

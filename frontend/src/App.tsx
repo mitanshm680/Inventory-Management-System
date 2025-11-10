@@ -19,13 +19,17 @@ import Suppliers from './pages/Suppliers';
 import Locations from './pages/Locations';
 import Batches from './pages/Batches';
 import StockAdjustments from './pages/StockAdjustments';
+import PurchaseOrders from './pages/PurchaseOrders';
+import Analytics from './pages/Analytics';
+import Forecasting from './pages/Forecasting';
+import AuditLog from './pages/AuditLog';
 // Removed: SupplierProducts and SupplierLocations - now part of Suppliers page with tabs
 
 // Hooks
 import { useAuth } from './contexts/AuthContext';
 
 const App: React.FC = () => {
-  const { user, loading } = useAuth();
+  const { loading } = useAuth();
 
   if (loading) {
     return (
@@ -154,6 +158,46 @@ const App: React.FC = () => {
             <ProtectedRoute requiredRoles={['admin', 'editor']}>
               <MainLayout>
                 <StockAdjustments />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/purchase-orders"
+          element={
+            <ProtectedRoute requiredRoles={['admin', 'editor']}>
+              <MainLayout>
+                <PurchaseOrders />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/analytics"
+          element={
+            <ProtectedRoute>
+              <MainLayout>
+                <Analytics />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/forecasting"
+          element={
+            <ProtectedRoute>
+              <MainLayout>
+                <Forecasting />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/audit-log"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <MainLayout>
+                <AuditLog />
               </MainLayout>
             </ProtectedRoute>
           }
