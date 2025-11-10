@@ -45,6 +45,7 @@ interface PurchaseOrderItem {
   quantity: number;
   unit_price: number;
   total_price?: number;
+  received_quantity?: number;
   notes?: string;
 }
 
@@ -94,7 +95,7 @@ const PurchaseOrders: React.FC = () => {
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [supplierFilter, setSupplierFilter] = useState<number | ''>('');
+  const [supplierFilter, setSupplierFilter] = useState<string>('');
 
   // Create PO Dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -120,7 +121,7 @@ const PurchaseOrders: React.FC = () => {
     try {
       const data = await apiService.getPurchaseOrders(
         statusFilter || undefined,
-        supplierFilter || undefined
+        supplierFilter ? parseInt(supplierFilter) : undefined
       );
       setPurchaseOrders(data);
     } catch (err: any) {
@@ -347,11 +348,11 @@ const PurchaseOrders: React.FC = () => {
                 <Select
                   value={supplierFilter}
                   label="Supplier"
-                  onChange={(e: SelectChangeEvent) => setSupplierFilter(e.target.value as any)}
+                  onChange={(e: SelectChangeEvent) => setSupplierFilter(e.target.value)}
                 >
                   <MenuItem value="">All Suppliers</MenuItem>
                   {suppliers.map((supplier) => (
-                    <MenuItem key={supplier.id} value={supplier.id}>
+                    <MenuItem key={supplier.id} value={supplier.id.toString()}>
                       {supplier.name}
                     </MenuItem>
                   ))}
