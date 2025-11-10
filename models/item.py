@@ -1,7 +1,7 @@
 # models/item.py
 
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 class Item(BaseModel):
     """Model for inventory items."""
@@ -9,8 +9,9 @@ class Item(BaseModel):
     quantity: int = Field(..., ge=0, description="The quantity of the item")
     group_name: Optional[str] = Field(None, description="The group the item belongs to")
     custom_fields: Dict[str, Any] = Field(default_factory=dict, description="Additional custom fields for the item")
-    
-    @validator('quantity')
+
+    @field_validator('quantity')
+    @classmethod
     def validate_quantity(cls, v):
         """Validate the item quantity."""
         if v < 0:

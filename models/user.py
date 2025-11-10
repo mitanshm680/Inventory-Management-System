@@ -2,7 +2,7 @@
 
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 class User(BaseModel):
     """Model for system users."""
@@ -10,8 +10,9 @@ class User(BaseModel):
     password_hash: str = Field(..., description="Hash of the user's password")
     role: str = Field(default='viewer', description="User's role (admin, editor, or viewer)")
     created_at: datetime = Field(default_factory=datetime.now, description="When the user was created")
-    
-    @validator('role')
+
+    @field_validator('role')
+    @classmethod
     def validate_role(cls, v):
         """Validate the user role."""
         valid_roles = ['admin', 'editor', 'viewer']
